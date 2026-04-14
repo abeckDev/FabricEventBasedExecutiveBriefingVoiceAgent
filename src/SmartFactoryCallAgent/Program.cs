@@ -9,11 +9,9 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<AcsSettings>(builder.Configuration.GetSection("Acs"));
 builder.Services.Configure<OpenAiSettings>(builder.Configuration.GetSection("OpenAi"));
 builder.Services.Configure<FoundrySettings>(builder.Configuration.GetSection("Foundry"));
-builder.Services.Configure<FabricSettings>(builder.Configuration.GetSection("Fabric"));
 
 // Register services
 builder.Services.AddSingleton<CallContextStore>();
-builder.Services.AddScoped<FabricDataService>();
 builder.Services.AddScoped<FoundryAgentService>();
 builder.Services.AddScoped<CallService>();
 builder.Services.AddScoped<AudioStreamingHandler>();
