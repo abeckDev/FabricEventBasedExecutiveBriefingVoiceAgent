@@ -1,0 +1,66 @@
+// ============================================================
+// 01_create_tables.kql
+// Create all tables in the Fabric Eventhouse KQL Database
+// Run this in your Fabric KQL Queryset
+// ============================================================
+
+// Raw events table (landing table for all incoming events)
+.create table RawEvents (
+    EventType: string,
+    MachineId: string,
+    StationName: string,
+    OrderId: string,
+    Payload: dynamic,
+    IngestTime: datetime
+)
+
+// Machine telemetry table
+.create table MachineTelemetry (
+    MachineId: string,
+    StationName: string,
+    OrderId: string,
+    Vibration: real,
+    Temperature: real,
+    Pressure: real,
+    Status: string,
+    Timestamp: datetime
+)
+
+// Assembly events table
+.create table AssemblyEvents (
+    StationName: string,
+    OrderId: string,
+    EventType: string,
+    Details: string,
+    Timestamp: datetime
+)
+
+// Production KPIs table
+.create table ProductionKPIs (
+    StationName: string,
+    OEE: real,
+    ScrapRate: real,
+    Uptime: real,
+    UnitsProduced: int,
+    Timestamp: datetime
+)
+
+// Orders table
+.create table Orders (
+    OrderId: string,
+    ProductName: string,
+    Status: string,
+    Quantity: int,
+    DueDate: datetime,
+    StationName: string,
+    CreatedAt: datetime
+)
+
+// Supply risk table
+.create table SupplyRisk (
+    Material: string,
+    Supplier: string,
+    RiskLevel: string,
+    RiskDescription: string,
+    AssessmentDate: datetime
+)
