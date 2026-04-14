@@ -1,6 +1,6 @@
 # Smart Factory Executive Briefing Voice Agent
 
-An event-driven voice agent system that automatically notifies factory managers about machine anomalies via phone call, powered by Microsoft Fabric, Azure Communication Services, and Azure OpenAI Realtime API.
+An event-driven voice agent system that automatically notifies factory managers about machine anomalies via phone call, powered by Microsoft Fabric, Azure AI Foundry, Azure Communication Services, and Azure OpenAI Realtime API.
 
 ## Architecture
 
@@ -12,15 +12,10 @@ Microsoft Fabric Data Activator
 Azure Container App (SmartFactoryCallAgent)
     ├── POST /api/alert
     │       │
-    │       ├── Query Fabric Eventhouse (KQL)
-    │       │   • MachineTelemetry (last 15 min)
-    │       │   • AssemblyEvents (last 1 hour)
-    │       │   • ProductionKPIs (last 8 hours)
-    │       │   • Active Orders
-    │       │   • Supply Risks
-    │       │
-    │       ├── Azure AI Foundry Agent
-    │       │   • Generates ~30-second executive summary
+    │       ├── Azure AI Foundry Agent (FoundryAgentService)
+    │       │   ├── Fabric Data Agent (grounding tool)
+    │       │   │   └── Fabric Eventhouse (KQL queries via Data Agent)
+    │       │   └── Generates ~30-second executive summary
     │       │
     │       └── ACS Call Automation
     │           • Places outbound PSTN call to manager
@@ -34,21 +29,24 @@ Azure Container App (SmartFactoryCallAgent)
             ├── ACS audio → Azure OpenAI Realtime API
             └── OpenAI responses → ACS audio
                 • Voice Q&A powered by gpt-4o-realtime
-                • Live KQL queries via function calling
+                • Follow-up questions answered via Foundry Agent → Data Agent
 ```
+
+**Key design principle**: The application is data-access agnostic. All factory data access goes through the Foundry Agent, which uses the Fabric Data Agent as a grounding tool. No direct Kusto/Eventhouse access is needed from the application — no database credentials required.
 
 ## Prerequisites
 
 - Azure subscription with the following resources:
   - Azure Communication Services with a PSTN phone number
   - Azure OpenAI with `gpt-4o-realtime-preview` deployment
-  - Azure AI Foundry project
+  - Azure AI Foundry project with a `gpt-4o` deployment
   - Azure Container Apps environment
   - Azure Key Vault
 - Microsoft Fabric workspace with:
   - Eventhouse (KQL Database)
   - Eventstream connected to Azure Event Hub
   - Data Activator configured for machine anomaly detection
+  - **Fabric Data Agent** exposing the KQL database (see setup below)
 - [Azure CLI](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli) installed
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) installed
 - [Docker](https://www.docker.com/) installed
@@ -72,8 +70,7 @@ az deployment group create \
   --parameters environmentName=smartfactory-prod \
                managerPhoneNumber="+14255550100" \
                acsPhoneNumber="+14255550199" \
-               fabricKustoEndpoint="https://your-eventhouse.kusto.data.microsoft.com" \
-               fabricDatabaseName="FactoryDB"
+               foundryDataAgentConnectionId="<your-data-agent-connection-id>"
 
 # Note the outputs: containerAppUrl, callbackUrl, webSocketUrl, alertWebhookUrl
 ```
@@ -93,14 +90,37 @@ kql/04_update_policies.kql     # Set up auto-routing update policies
 kql/05_seed_supply_risk.kql    # Seed supply risk and order data
 ```
 
-### 3. Configure Eventstream
+### 3. Create and Connect the Fabric Data Agent
+
+The application uses a Fabric Data Agent (exposed via AI Foundry) instead of direct Kusto access.
+
+**Step 3a: Create the Fabric Data Agent**
+
+1. In your Microsoft Fabric workspace, open your **Eventhouse** KQL Database
+2. Click **New** → **Data Agent** (or navigate to the Data Agent section)
+3. Configure the Data Agent to expose the relevant tables (MachineTelemetry, AssemblyEvents, ProductionKPIs, Orders, SupplyRisk)
+4. Publish and note the Data Agent endpoint URL
+
+**Step 3b: Connect the Data Agent to AI Foundry**
+
+1. In your Azure AI Foundry project, go to **Settings** → **Connected resources**
+2. Click **Add connection** → **Microsoft Fabric**
+3. Enter the Fabric Data Agent endpoint URL
+4. Complete the connection setup
+5. Copy the **Connection ID** (you will need this for configuration)
+
+**Step 3c: Configure the application**
+
+Set `Foundry__DataAgentConnectionId` to the Connection ID copied in the previous step.
+
+### 4. Configure Eventstream
 
 1. In your Fabric workspace, create a new **Eventstream**
 2. Add your Azure Event Hub as a **Source**
 3. Add the Eventhouse **RawEvents** table as a **Destination**
 4. Configure the destination to use the `RawEventsMapping` JSON mapping
 
-### 4. Configure and Run the Simulator
+### 5. Configure and Run the Simulator
 
 Update the connection string in the simulator before running:
 
@@ -119,7 +139,7 @@ The simulator will:
 - Send machine telemetry, assembly events, and KPI events every second
 - Trigger an anomaly (vibration > 1.2g) every 50 events on MACHINE-001
 
-### 5. Build and Deploy the Container App
+### 6. Build and Deploy the Container App
 
 ```bash
 # Build Docker image
@@ -137,7 +157,7 @@ az containerapp update \
   --image ghcr.io/YOUR_ORG/smartfactorycallagent:latest
 ```
 
-### 6. Configure Data Activator
+### 7. Configure Data Activator
 
 1. In Microsoft Fabric, open **Data Activator**
 2. Create a new **Reflex** item
@@ -149,7 +169,7 @@ az containerapp update \
    - **Method**: POST
    - **Body**: Include MachineId, StationName, Vibration, Temperature, Timestamp, OrderId
 
-### 7. Test End-to-End
+### 8. Test End-to-End
 
 ```bash
 # Test the webhook manually
@@ -178,8 +198,8 @@ curl -X POST https://YOUR_CONTAINER_APP/api/alert \
 | OpenAI API Key | `OpenAi__ApiKey` | Azure OpenAI API key |
 | OpenAI Deployment | `OpenAi__DeploymentName` | Deployment name (default: gpt-4o-realtime) |
 | Foundry Project Endpoint | `Foundry__ProjectEndpoint` | AI Foundry project discovery URL |
-| Fabric KQL Endpoint | `Fabric__KustoEndpoint` | Fabric Eventhouse KQL endpoint |
-| Fabric Database | `Fabric__DatabaseName` | KQL database name |
+| Foundry Model Deployment | `Foundry__ModelDeploymentName` | Model deployment name for the agent (default: gpt-4o) |
+| Data Agent Connection ID | `Foundry__DataAgentConnectionId` | Connection ID of the Fabric Data Agent in AI Foundry |
 | Manager Phone | `ManagerPhoneNumber` | Manager's phone number for outbound calls (E.164) |
 
 ## Local Development
@@ -196,8 +216,8 @@ export Acs__CallbackBaseUrl="https://your-ngrok-url.ngrok.io"
 export OpenAi__Endpoint="https://your-openai.openai.azure.com/"
 export OpenAi__ApiKey="<YOUR_API_KEY>"
 export Foundry__ProjectEndpoint="https://your-project.api.azureml.ms"
-export Fabric__KustoEndpoint="https://your-eventhouse.kusto.data.microsoft.com"
-export Fabric__DatabaseName="FactoryDB"
+export Foundry__ModelDeploymentName="gpt-4o"
+export Foundry__DataAgentConnectionId="<YOUR_FABRIC_DATA_AGENT_CONNECTION_ID>"
 export ManagerPhoneNumber="+14255550100"
 
 # Run the app
@@ -224,12 +244,10 @@ ngrok http 5000
 │       │   └── CallbackController.cs             # POST /api/callbacks
 │       ├── Services/
 │       │   ├── CallService.cs                    # ACS Call Automation
-│       │   ├── FoundryAgentService.cs            # Azure AI Foundry Agent
-│       │   ├── FabricDataService.cs              # Fabric Eventhouse KQL
+│       │   ├── FoundryAgentService.cs            # Azure AI Foundry Agent (+ Data Agent grounding)
 │       │   └── AudioStreamingHandler.cs          # WebSocket audio bridge
 │       ├── Models/
 │       │   ├── DataActivatorAlert.cs             # Alert payload model
-│       │   ├── FactoryContext.cs                 # Factory data context
 │       │   └── CallContextStore.cs               # In-memory call state
 │       └── Configuration/
 │           └── AppSettings.cs                    # Strongly-typed settings
@@ -263,10 +281,11 @@ ngrok http 5000
 - Check `CallbackController` logs for event handling errors
 - Ensure the ACS phone number is provisioned for voice calls
 
-### KQL queries failing
-- Verify `Fabric__KustoEndpoint` format: `https://YOURDB.kusto.data.microsoft.com`
-- Ensure the Container App managed identity has **Viewer** role on the Fabric Eventhouse
-- Test KQL connectivity: run a simple query in the Fabric KQL Queryset
+### Foundry Agent not returning data
+- Verify `Foundry__DataAgentConnectionId` is set to a valid connection ID in your AI Foundry project
+- Ensure the Fabric Data Agent is published and the connection is active in AI Foundry
+- Check that the AI Foundry project managed identity has access to the Fabric workspace
+- Verify `Foundry__ProjectEndpoint` is the correct AI Foundry project endpoint
 
 ### OpenAI Realtime connection failing
 - Verify `gpt-4o-realtime-preview` deployment exists and is active
@@ -276,7 +295,7 @@ ngrok http 5000
 ### Data Activator not triggering
 - Verify the Reflex is monitoring the correct stream and field
 - Check that the alert threshold (vibration > 1.2g for 60s) is being breached
-- Test by sending a manual POST to `/api/alert` (see step 7 above)
+- Test by sending a manual POST to `/api/alert` (see step 8 above)
 
 ## License
 

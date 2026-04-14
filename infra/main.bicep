@@ -10,11 +10,8 @@ param managerPhoneNumber string
 @description('ACS phone number for outbound caller ID (E.164 format, e.g. +14255550199)')
 param acsPhoneNumber string
 
-@description('Fabric Eventhouse KQL endpoint URL')
-param fabricKustoEndpoint string
-
-@description('Fabric KQL database name')
-param fabricDatabaseName string
+@description('Connection ID of the Fabric Data Agent in the AI Foundry project used for data grounding')
+param foundryDataAgentConnectionId string
 
 @description('Container image to deploy (e.g. ghcr.io/yourorg/smartfactorycallagent:latest)')
 param containerImage string = 'mcr.microsoft.com/dotnet/samples:aspnetapp'
@@ -268,12 +265,12 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: aiProject.properties.discoveryUrl ?? ''
             }
             {
-              name: 'Fabric__KustoEndpoint'
-              value: fabricKustoEndpoint
+              name: 'Foundry__ModelDeploymentName'
+              value: 'gpt-4o'
             }
             {
-              name: 'Fabric__DatabaseName'
-              value: fabricDatabaseName
+              name: 'Foundry__DataAgentConnectionId'
+              value: foundryDataAgentConnectionId
             }
             {
               name: 'ManagerPhoneNumber'

@@ -13,18 +13,18 @@ public class AudioStreamingHandler
 {
     private readonly OpenAiSettings _openAiSettings;
     private readonly CallContextStore _callContextStore;
-    private readonly FabricDataService _fabricDataService;
+    private readonly FoundryAgentService _foundryAgentService;
     private readonly ILogger<AudioStreamingHandler> _logger;
 
     public AudioStreamingHandler(
         IOptions<OpenAiSettings> openAiSettings,
         CallContextStore callContextStore,
-        FabricDataService fabricDataService,
+        FoundryAgentService foundryAgentService,
         ILogger<AudioStreamingHandler> logger)
     {
         _openAiSettings = openAiSettings.Value;
         _callContextStore = callContextStore;
-        _fabricDataService = fabricDataService;
+        _foundryAgentService = foundryAgentService;
         _logger = logger;
     }
 
@@ -104,20 +104,20 @@ public class AudioStreamingHandler
                     new
                     {
                         type = "function",
-                        name = "query_factory_data",
-                        description = "Execute a KQL query against the Fabric Eventhouse to retrieve live factory data",
+                        name = "ask_factory_assistant",
+                        description = "Ask the factory data assistant a question about production data, machine telemetry, orders, KPIs, or supply chain risks. The assistant has access to the live factory database and will query it to answer the question.",
                         parameters = new
                         {
                             type = "object",
                             properties = new
                             {
-                                kql_query = new
+                                question = new
                                 {
                                     type = "string",
-                                    description = "A valid KQL query to execute against the factory database"
+                                    description = "A natural language question about factory data, e.g. 'What are the active orders?' or 'Show me the vibration trend for machine M-202 in the last hour'"
                                 }
                             },
-                            required = new[] { "kql_query" }
+                            required = new[] { "question" }
                         }
                     }
                 },
@@ -138,14 +138,9 @@ public class AudioStreamingHandler
             EXECUTIVE SUMMARY (already read to the manager):
             {callContext.ExecSummary}
             
-            FACTORY CONTEXT:
-            - Telemetry: {callContext.FactoryContext?.TelemetryJson ?? "N/A"}
-            - KPIs: {callContext.FactoryContext?.KpiJson ?? "N/A"}
-            - Active Orders: {callContext.FactoryContext?.OrdersJson ?? "N/A"}
-            - Supply Risks: {callContext.FactoryContext?.SupplyRisksJson ?? "N/A"}
-            
             You can answer follow-up questions from the manager about the machine anomaly, production impact,
-            and recommended actions. Use the query_factory_data tool to fetch fresh data when needed.
+            and recommended actions. Use the ask_factory_assistant tool to fetch fresh data from the factory
+            database when needed.
             
             Be concise and professional. When the manager says "goodbye", "hang up", or "that's all", 
             end the conversation politely.
@@ -275,7 +270,7 @@ public class AudioStreamingHandler
                     break;
 
                 case "response.function_call_arguments.done":
-                    await HandleFunctionCallAsync(json!, openAiWs, ct);
+                    await HandleFunctionCallAsync(json!, openAiWs, callConnectionId, ct);
                     break;
 
                 case "response.output_item.done":
@@ -302,27 +297,30 @@ public class AudioStreamingHandler
         }
     }
 
-    private async Task HandleFunctionCallAsync(JsonNode json, ClientWebSocket openAiWs, CancellationToken ct)
+    private async Task HandleFunctionCallAsync(JsonNode json, ClientWebSocket openAiWs, string callConnectionId, CancellationToken ct)
     {
         var callId = json["call_id"]?.GetValue<string>();
         var name = json["name"]?.GetValue<string>();
         var argumentsStr = json["arguments"]?.GetValue<string>();
 
-        if (name != "query_factory_data" || string.IsNullOrEmpty(argumentsStr))
+        if (name != "ask_factory_assistant" || string.IsNullOrEmpty(argumentsStr))
             return;
 
         string queryResult;
         try
         {
             var args = JsonNode.Parse(argumentsStr);
-            var kqlQuery = args?["kql_query"]?.GetValue<string>() ?? string.Empty;
-            _logger.LogInformation("Executing KQL query from AI: {Query}", kqlQuery[..Math.Min(kqlQuery.Length, 100)]);
-            queryResult = await _fabricDataService.ExecuteRawQueryAsync(kqlQuery);
+            var question = args?["question"]?.GetValue<string>() ?? string.Empty;
+            _logger.LogInformation("Forwarding question to factory assistant: {Question}", question[..Math.Min(question.Length, 100)]);
+
+            var callContext = _callContextStore.Get(callConnectionId);
+            var execSummaryContext = callContext?.ExecSummary ?? string.Empty;
+            queryResult = await _foundryAgentService.AnswerFollowUpAsync(question, execSummaryContext);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error executing KQL query from function call");
-            queryResult = JsonSerializer.Serialize(new { error = "Failed to execute query" });
+            _logger.LogError(ex, "Error calling factory assistant from function call");
+            queryResult = "I'm sorry, I was unable to retrieve that information right now.";
         }
 
         // Send function output back to OpenAI

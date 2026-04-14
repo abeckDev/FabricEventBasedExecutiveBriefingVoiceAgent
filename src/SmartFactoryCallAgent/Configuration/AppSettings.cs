@@ -17,10 +17,6 @@ public class OpenAiSettings
 public class FoundrySettings
 {
     public string ProjectEndpoint { get; set; } = string.Empty;
-}
-
-public class FabricSettings
-{
-    public string KustoEndpoint { get; set; } = string.Empty;
-    public string DatabaseName { get; set; } = string.Empty;
+    public string ModelDeploymentName { get; set; } = "gpt-4o";
+    public string DataAgentConnectionId { get; set; } = string.Empty;
 }
