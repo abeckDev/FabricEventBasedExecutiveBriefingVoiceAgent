@@ -25,8 +25,7 @@ public class CallService
 
     public async Task<string?> PlaceCallWithSummaryAsync(
         string managerPhoneNumber,
-        string execSummary,
-        FactoryContext factoryContext)
+        string execSummary)
     {
         try
         {
@@ -63,7 +62,6 @@ public class CallService
             {
                 CallConnectionId = callConnectionId,
                 ExecSummary = execSummary,
-                FactoryContext = factoryContext,
                 ManagerPhoneNumber = managerPhoneNumber
             });
 

@@ -6,7 +6,6 @@ public class CallContext
 {
     public string CallConnectionId { get; set; } = string.Empty;
     public string ExecSummary { get; set; } = string.Empty;
-    public FactoryContext? FactoryContext { get; set; }
     public string ManagerPhoneNumber { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

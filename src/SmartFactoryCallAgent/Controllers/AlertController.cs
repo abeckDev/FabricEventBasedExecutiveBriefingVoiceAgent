@@ -8,20 +8,17 @@ namespace SmartFactoryCallAgent.Controllers;
 [Route("api/alert")]
 public class AlertController : ControllerBase
 {
-    private readonly FabricDataService _fabricDataService;
     private readonly FoundryAgentService _foundryAgentService;
     private readonly CallService _callService;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AlertController> _logger;
 
     public AlertController(
-        FabricDataService fabricDataService,
         FoundryAgentService foundryAgentService,
         CallService callService,
         IConfiguration configuration,
         ILogger<AlertController> logger)
     {
-        _fabricDataService = fabricDataService;
         _foundryAgentService = foundryAgentService;
         _callService = callService;
         _configuration = configuration;
@@ -37,21 +34,15 @@ public class AlertController : ControllerBase
 
         try
         {
-            // 1. Query Fabric Eventhouse for factory context
-            var factoryContext = await _fabricDataService.QueryContextAsync(
-                alert.MachineId ?? string.Empty,
-                alert.StationName ?? string.Empty);
-
-            // 2. Generate executive summary via Foundry Agent
-            var execSummary = await _foundryAgentService.GenerateExecSummaryAsync(alert, factoryContext);
+            // 1. Generate executive summary via Foundry Agent (queries Data Agent internally)
+            var execSummary = await _foundryAgentService.GenerateExecSummaryAsync(alert);
             _logger.LogInformation("Generated exec summary ({Length} chars)", execSummary.Length);
 
-            // 3. Place outbound PSTN call
+            // 2. Place outbound PSTN call
             var managerPhone = _configuration["ManagerPhoneNumber"]
                 ?? throw new InvalidOperationException("ManagerPhoneNumber not configured");
 
-            var callConnectionId = await _callService.PlaceCallWithSummaryAsync(
-                managerPhone, execSummary, factoryContext);
+            var callConnectionId = await _callService.PlaceCallWithSummaryAsync(managerPhone, execSummary);
 
             if (callConnectionId == null)
             {
