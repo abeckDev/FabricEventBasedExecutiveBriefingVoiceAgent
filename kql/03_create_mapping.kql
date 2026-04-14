@@ -1,0 +1,49 @@
+// ============================================================
+// 03_create_mapping.kql
+// Create JSON ingestion mappings for the RawEvents table
+// Run this in your Fabric KQL Queryset
+// ============================================================
+
+.create table RawEvents ingestion json mapping "RawEventsMapping"
+'['
+'  {"column":"EventType",  "path":"$.EventType",   "datatype":"string"},'
+'  {"column":"MachineId",  "path":"$.MachineId",   "datatype":"string"},'
+'  {"column":"StationName","path":"$.StationName",  "datatype":"string"},'
+'  {"column":"OrderId",    "path":"$.OrderId",      "datatype":"string"},'
+'  {"column":"Payload",    "path":"$",              "datatype":"dynamic"},'
+'  {"column":"IngestTime", "path":"$.Timestamp",    "datatype":"datetime"}'
+']'
+
+// JSON mappings for MachineTelemetry
+.create table MachineTelemetry ingestion json mapping "MachineTelemetryMapping"
+'['
+'  {"column":"MachineId",   "path":"$.MachineId",   "datatype":"string"},'
+'  {"column":"StationName", "path":"$.StationName", "datatype":"string"},'
+'  {"column":"OrderId",     "path":"$.OrderId",     "datatype":"string"},'
+'  {"column":"Vibration",   "path":"$.Vibration",   "datatype":"real"},'
+'  {"column":"Temperature", "path":"$.Temperature", "datatype":"real"},'
+'  {"column":"Pressure",    "path":"$.Pressure",    "datatype":"real"},'
+'  {"column":"Status",      "path":"$.Status",      "datatype":"string"},'
+'  {"column":"Timestamp",   "path":"$.Timestamp",   "datatype":"datetime"}'
+']'
+
+// JSON mappings for AssemblyEvents
+.create table AssemblyEvents ingestion json mapping "AssemblyEventsMapping"
+'['
+'  {"column":"StationName", "path":"$.StationName",        "datatype":"string"},'
+'  {"column":"OrderId",     "path":"$.OrderId",            "datatype":"string"},'
+'  {"column":"EventType",   "path":"$.AssemblyEventType",  "datatype":"string"},'
+'  {"column":"Details",     "path":"$.Details",            "datatype":"string"},'
+'  {"column":"Timestamp",   "path":"$.Timestamp",          "datatype":"datetime"}'
+']'
+
+// JSON mappings for ProductionKPIs
+.create table ProductionKPIs ingestion json mapping "ProductionKPIsMapping"
+'['
+'  {"column":"StationName",    "path":"$.StationName",    "datatype":"string"},'
+'  {"column":"OEE",            "path":"$.OEE",            "datatype":"real"},'
+'  {"column":"ScrapRate",      "path":"$.ScrapRate",      "datatype":"real"},'
+'  {"column":"Uptime",         "path":"$.Uptime",         "datatype":"real"},'
+'  {"column":"UnitsProduced",  "path":"$.UnitsProduced",  "datatype":"int"},'
+'  {"column":"Timestamp",      "path":"$.Timestamp",      "datatype":"datetime"}'
+']'
