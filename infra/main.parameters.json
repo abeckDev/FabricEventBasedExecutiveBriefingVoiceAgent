@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "eastus"
+    },
+    "environmentName": {
+      "value": "smartfactory-dev"
+    },
+    "managerPhoneNumber": {
+      "value": "<MANAGER_PHONE_NUMBER_E164>"
+    },
+    "acsPhoneNumber": {
+      "value": "<ACS_PHONE_NUMBER_E164>"
+    },
+    "fabricKustoEndpoint": {
+      "value": "<FABRIC_EVENTHOUSE_KQL_ENDPOINT>"
+    },
+    "fabricDatabaseName": {
+      "value": "<FABRIC_KQL_DATABASE_NAME>"
+    },
+    "containerImage": {
+      "value": "ghcr.io/<YOUR_GITHUB_ORG>/fabriceventbasedexecutivebriefingvoiceagent:latest"
+    }
+  }
+}
