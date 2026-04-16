@@ -81,8 +81,13 @@ public class AudioStreamingHandler
         var openAiWsUri = BuildOpenAiRealtimeUri();
         using var openAiWebSocket = new ClientWebSocket();
 
-        // Use managed identity for auth if configured, otherwise try API key
-        if (!string.IsNullOrEmpty(_voiceAgentSettings.ManagedIdentityClientId))
+        // Use API key for OpenAI if available, otherwise fall back to managed identity / default credential
+        if (!string.IsNullOrEmpty(_openAiSettings.ApiKey))
+        {
+            openAiWebSocket.Options.SetRequestHeader("api-key", _openAiSettings.ApiKey);
+            _logger.LogInformation("Using API key for OpenAI Realtime API");
+        }
+        else if (!string.IsNullOrEmpty(_voiceAgentSettings.ManagedIdentityClientId))
         {
             var credential = new ManagedIdentityCredential(
                 ManagedIdentityId.FromUserAssignedClientId(_voiceAgentSettings.ManagedIdentityClientId!));
@@ -90,11 +95,6 @@ public class AudioStreamingHandler
                 new TokenRequestContext(new[] { "https://cognitiveservices.azure.com/.default" }), cancellationToken);
             openAiWebSocket.Options.SetRequestHeader("Authorization", $"Bearer {tokenResult.Token}");
             _logger.LogInformation("Obtained Azure AD token for OpenAI Realtime API");
-        }
-        else if (!string.IsNullOrEmpty(_openAiSettings.ApiKey))
-        {
-            openAiWebSocket.Options.SetRequestHeader("api-key", _openAiSettings.ApiKey);
-            _logger.LogInformation("Using API key for OpenAI Realtime API");
         }
         else
         {
