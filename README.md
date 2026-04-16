@@ -56,7 +56,6 @@ This building block can power voice calling for various Fabric demos:
 | Scenario | Alert Source | Data Source | Use Case |
 |----------|--------------|-------------|----------|
 | Smart Factory | Data Activator (telemetry) | Eventhouse (machine data) | Equipment anomaly notifications |
-| Healthcare | Notebook (patient monitoring) | Lakehouse (patient records) | Critical vital sign alerts |
 | Retail | Data Activator (inventory) | SQL Analytics Endpoint | Stock level warnings |
 | Finance | Notebook (fraud detection) | Eventhouse (transactions) | Suspicious activity alerts |
 
