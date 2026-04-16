@@ -70,7 +70,7 @@ public class CallService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error placing outbound call to {PhoneNumber}", phoneNumber);
+            _logger.LogError(ex, "Error placing outbound call to phone number (masked)");
             return null;
         }
     }

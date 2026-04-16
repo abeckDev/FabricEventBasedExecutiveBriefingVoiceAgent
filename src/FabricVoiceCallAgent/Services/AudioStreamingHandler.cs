@@ -85,7 +85,7 @@ public class AudioStreamingHandler
         if (!string.IsNullOrEmpty(_voiceAgentSettings.ManagedIdentityClientId))
         {
             var credential = new ManagedIdentityCredential(
-                ManagedIdentityId.FromUserAssignedClientId(_voiceAgentSettings.ManagedIdentityClientId));
+                ManagedIdentityId.FromUserAssignedClientId(_voiceAgentSettings.ManagedIdentityClientId!));
             var tokenResult = await credential.GetTokenAsync(
                 new TokenRequestContext(new[] { "https://cognitiveservices.azure.com/.default" }), cancellationToken);
             openAiWebSocket.Options.SetRequestHeader("Authorization", $"Bearer {tokenResult.Token}");

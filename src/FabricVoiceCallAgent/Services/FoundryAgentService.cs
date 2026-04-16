@@ -168,7 +168,7 @@ public class FoundryAgentService : IDisposable
         if (!string.IsNullOrEmpty(_voiceAgentSettings.ManagedIdentityClientId))
         {
             credential = new ManagedIdentityCredential(
-                ManagedIdentityId.FromUserAssignedClientId(_voiceAgentSettings.ManagedIdentityClientId));
+                ManagedIdentityId.FromUserAssignedClientId(_voiceAgentSettings.ManagedIdentityClientId!));
         }
         else
         {
