@@ -4,7 +4,7 @@ WORKDIR /src
 COPY ["SmartFactoryCallAgent.csproj", "."]
 RUN dotnet restore "SmartFactoryCallAgent.csproj"
 COPY . .
-RUN dotnet publish "SmartFactoryCallAgent.csproj" -c Release -o /app/publish --no-restore
+RUN dotnet publish "SmartFactoryCallAgent.csproj" -c Release -o /app/publish
 
 # Stage 2: Runtime
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime

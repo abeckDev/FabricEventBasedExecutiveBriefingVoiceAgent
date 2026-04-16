@@ -2,6 +2,8 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Azure.Identity;
+using Azure.Core;
 using Microsoft.Extensions.Options;
 using SmartFactoryCallAgent.Configuration;
 using SmartFactoryCallAgent.Models;
@@ -28,8 +30,43 @@ public class AudioStreamingHandler
         _logger = logger;
     }
 
-    public async Task HandleAsync(WebSocket acsWebSocket, string callConnectionId, CancellationToken cancellationToken)
+    public async Task HandleAsync(WebSocket acsWebSocket, CancellationToken cancellationToken)
     {
+        // First, receive the initial metadata message from ACS to get the callConnectionId
+        var buffer = new byte[65536];
+        string? callConnectionId = null;
+
+        var result = await acsWebSocket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
+        if (result.MessageType == WebSocketMessageType.Text)
+        {
+            var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
+            _logger.LogInformation("ACS WebSocket first message: {Message}", message[..Math.Min(message.Length, 500)]);
+
+            var json = JsonNode.Parse(message);
+            var kind = json?["kind"]?.GetValue<string>();
+
+            // Try different metadata paths used by ACS
+            callConnectionId = json?["audioMetadata"]?["callConnectionId"]?.GetValue<string>()
+                ?? json?["metadata"]?["callConnectionId"]?.GetValue<string>()
+                ?? json?["callConnectionId"]?.GetValue<string>();
+
+            // If still null, search the CallContextStore for any active context
+            if (string.IsNullOrEmpty(callConnectionId))
+            {
+                callConnectionId = _callContextStore.GetAnyActiveCallConnectionId();
+            }
+
+            _logger.LogInformation("ACS WebSocket connected for call {CallConnectionId} (kind={Kind})",
+                callConnectionId ?? "unknown", kind ?? "n/a");
+        }
+
+        if (string.IsNullOrEmpty(callConnectionId))
+        {
+            _logger.LogWarning("No callConnectionId found in ACS WebSocket - closing");
+            await acsWebSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "No callConnectionId", cancellationToken);
+            return;
+        }
+
         var sanitizedId = Sanitize(callConnectionId);
         var callContext = _callContextStore.Get(callConnectionId);
         if (callContext == null)
@@ -41,8 +78,13 @@ public class AudioStreamingHandler
 
         var openAiWsUri = BuildOpenAiRealtimeUri();
         using var openAiWebSocket = new ClientWebSocket();
-        openAiWebSocket.Options.SetRequestHeader("Authorization", $"Bearer {_openAiSettings.ApiKey}");
-        openAiWebSocket.Options.SetRequestHeader("OpenAI-Beta", "realtime=v1");
+
+        // Use managed identity for auth (local auth is disabled on the OpenAI resource)
+        var credential = new ManagedIdentityCredential("b4d2f012-83a3-4132-9e31-d50f875f57ce");
+        var tokenResult = await credential.GetTokenAsync(
+            new TokenRequestContext(new[] { "https://cognitiveservices.azure.com/.default" }), cancellationToken);
+        openAiWebSocket.Options.SetRequestHeader("Authorization", $"Bearer {tokenResult.Token}");
+        _logger.LogInformation("Obtained Azure AD token for OpenAI Realtime API");
 
         try
         {
@@ -51,6 +93,13 @@ public class AudioStreamingHandler
 
             // Send session.update with system prompt and tools
             await SendSessionUpdateAsync(openAiWebSocket, callContext, cancellationToken);
+
+            // Trigger OpenAI to immediately speak the executive summary
+            var responseCreate = new { type = "response.create" };
+            var responseJson = JsonSerializer.Serialize(responseCreate);
+            var responseBytes = Encoding.UTF8.GetBytes(responseJson);
+            await openAiWebSocket.SendAsync(new ArraySegment<byte>(responseBytes), WebSocketMessageType.Text, true, cancellationToken);
+            _logger.LogInformation("Triggered OpenAI Realtime to speak exec summary for call {CallConnectionId}", sanitizedId);
 
             // Run bidirectional bridging concurrently
             var acsToOpenAi = ForwardAcsToOpenAiAsync(acsWebSocket, openAiWebSocket, cancellationToken);
@@ -75,7 +124,7 @@ public class AudioStreamingHandler
     {
         var endpoint = _openAiSettings.Endpoint.TrimEnd('/');
         var wsEndpoint = endpoint.Replace("https://", "wss://").Replace("http://", "ws://");
-        return new Uri($"{wsEndpoint}/openai/realtime?api-version=2025-04-01-preview&deployment={_openAiSettings.DeploymentName}");
+        return new Uri($"{wsEndpoint}/openai/realtime?api-version=2024-10-01-preview&deployment={_openAiSettings.DeploymentName}");
     }
 
     private async Task SendSessionUpdateAsync(ClientWebSocket openAiWs, CallContext callContext, CancellationToken ct)
@@ -133,10 +182,12 @@ public class AudioStreamingHandler
     private static string BuildSystemPrompt(CallContext callContext)
     {
         return $"""
-            You are a smart factory AI assistant on a phone call with a factory manager.
+            You are a smart factory AI assistant calling a factory manager with an urgent alert.
             
-            EXECUTIVE SUMMARY (already read to the manager):
-            {callContext.ExecSummary}
+            IMPORTANT: Start the conversation IMMEDIATELY by reading this executive summary aloud:
+            "{callContext.ExecSummary}"
+            
+            After reading the summary, say: "I'm here to answer any follow-up questions about this alert. What would you like to know?"
             
             You can answer follow-up questions from the manager about the machine anomaly, production impact,
             and recommended actions. Use the ask_factory_assistant tool to fetch fresh data from the factory

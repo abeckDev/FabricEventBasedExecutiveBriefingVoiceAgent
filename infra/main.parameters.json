@@ -3,22 +3,22 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "location": {
-      "value": "eastus"
+      "value": "swedencentral"
     },
     "environmentName": {
-      "value": "smartfactory-dev"
+      "value": "smartfactory-demo"
     },
     "managerPhoneNumber": {
-      "value": "<MANAGER_PHONE_NUMBER_E164>"
+      "value": "+1234567890"
     },
     "acsPhoneNumber": {
-      "value": "<ACS_PHONE_NUMBER_E164>"
+      "value": "+33801150157"
     },
     "foundryDataAgentConnectionId": {
-      "value": "<FABRIC_DATA_AGENT_CONNECTION_ID>"
+      "value": "PENDING_DATA_AGENT_SETUP"
     },
     "containerImage": {
-      "value": "ghcr.io/<YOUR_GITHUB_ORG>/fabriceventbasedexecutivebriefingvoiceagent:latest"
+      "value": "mcr.microsoft.com/dotnet/samples:aspnetapp"
     }
   }
 }

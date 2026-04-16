@@ -32,6 +32,8 @@ public class CallService
             var client = new CallAutomationClient(_acsSettings.ConnectionString);
 
             var callbackUri = new Uri($"{_acsSettings.CallbackBaseUrl}/api/callbacks");
+            // Note: callConnectionId is not known yet, so ACS will connect to the WebSocket
+            // and the handler will need to extract it from the streaming metadata
             var wsTransportUri = new Uri($"{_acsSettings.CallbackBaseUrl.Replace("https://", "wss://").Replace("http://", "ws://")}/ws/audio");
 
             var target = new PhoneNumberIdentifier(managerPhoneNumber);

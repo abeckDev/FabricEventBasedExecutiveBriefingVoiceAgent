@@ -1,4 +1,5 @@
 using Azure.AI.Projects;
+using Azure;
 using Azure.Identity;
 using Microsoft.Extensions.Options;
 using SmartFactoryCallAgent.Configuration;
@@ -34,7 +35,9 @@ public class FoundryAgentService : IDisposable
     {
         try
         {
-            var client = new AgentsClient(_settings.ProjectEndpoint, new DefaultAzureCredential());
+            // Build connection string for Azure AI Projects
+            var connectionString = $"{_settings.ProjectEndpoint};b814d650-0963-4701-9dc9-feffc970ad6a;AI_FoundryStandalone-Sandbox;aifoundry-sandbox";
+            var client = new AgentsClient(connectionString, new DefaultAzureCredential());
             var agent = await GetOrCreateAgentAsync(client);
 
             var threadResponse = await client.CreateThreadAsync();
@@ -94,7 +97,9 @@ public class FoundryAgentService : IDisposable
     {
         try
         {
-            var client = new AgentsClient(_settings.ProjectEndpoint, new DefaultAzureCredential());
+            // Build connection string for Azure AI Projects
+            var connectionString = $"{_settings.ProjectEndpoint};b814d650-0963-4701-9dc9-feffc970ad6a;AI_FoundryStandalone-Sandbox;aifoundry-sandbox";
+            var client = new AgentsClient(connectionString, new DefaultAzureCredential());
             var agent = await GetOrCreateAgentAsync(client);
 
             var threadResponse = await client.CreateThreadAsync();

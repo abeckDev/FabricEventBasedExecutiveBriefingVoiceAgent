@@ -40,19 +40,11 @@ app.Map("/ws/audio", async context =>
         return;
     }
 
-    // Extract callConnectionId from query string
-    var callConnectionId = context.Request.Query["callConnectionId"].ToString();
-    if (string.IsNullOrEmpty(callConnectionId))
-    {
-        context.Response.StatusCode = 400;
-        return;
-    }
-
     using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
     var handler = context.RequestServices.GetRequiredService<AudioStreamingHandler>();
 
     using var cts = new CancellationTokenSource(TimeSpan.FromHours(1));
-    await handler.HandleAsync(webSocket, callConnectionId, cts.Token);
+    await handler.HandleAsync(webSocket, cts.Token);
 });
 
 if (app.Environment.IsDevelopment())

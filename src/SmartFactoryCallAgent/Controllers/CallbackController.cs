@@ -12,7 +12,7 @@ public class CallbackController : ControllerBase
     private readonly CallContextStore _callContextStore;
     private readonly ILogger<CallbackController> _logger;
 
-    private const string VoiceName = "en-US-AndrewMultilingualNeural";
+    private const string VoiceName = "en-US-AriaNeural";
     private const string FollowUpPrompt = "You may now ask me any follow-up questions about the machine anomaly or production impact.";
 
     public CallbackController(
@@ -56,6 +56,15 @@ public class CallbackController : ControllerBase
                     HandlePlayFailed(playFailed);
                     break;
 
+                case MediaStreamingStarted mediaStreamingStarted:
+                    _logger.LogInformation("Media streaming started for call {CallConnectionId}", mediaStreamingStarted.CallConnectionId);
+                    break;
+
+                case MediaStreamingFailed mediaStreamingFailed:
+                    _logger.LogError("Media streaming failed for call {CallConnectionId}: {Message}",
+                        mediaStreamingFailed.CallConnectionId, mediaStreamingFailed.ResultInformation?.Message);
+                    break;
+
                 case CallDisconnected callDisconnected:
                     HandleCallDisconnected(callDisconnected);
                     break;
@@ -78,53 +87,28 @@ public class CallbackController : ControllerBase
 
         try
         {
+            // Skip ACS TTS - start media streaming immediately so OpenAI Realtime API
+            // speaks the exec summary and handles follow-up Q&A via WebSocket audio
             var client = GetCallConnectionClient(callConnected.CallConnectionId);
             var callMedia = client.GetCallMedia();
 
-            var textSource = new TextSource(callContext.ExecSummary)
-            {
-                VoiceName = VoiceName
-            };
-
-            await callMedia.PlayToAllAsync(textSource);
-            _logger.LogInformation("Playing exec summary to call {CallConnectionId}", callConnected.CallConnectionId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error playing exec summary for call {CallConnectionId}", callConnected.CallConnectionId);
-        }
-    }
-
-    private async Task HandlePlayCompletedAsync(PlayCompleted playCompleted)
-    {
-        _logger.LogInformation("Play completed for call: {CallConnectionId}", playCompleted.CallConnectionId);
-
-        try
-        {
-            var client = GetCallConnectionClient(playCompleted.CallConnectionId);
-            var callMedia = client.GetCallMedia();
-
-            // Play the follow-up prompt
-            var promptSource = new TextSource(FollowUpPrompt)
-            {
-                VoiceName = VoiceName
-            };
-
-            await callMedia.PlayToAllAsync(promptSource);
-
-            // Start bidirectional media streaming
             var startStreamingOptions = new StartMediaStreamingOptions
             {
                 OperationContext = "bidirectional-audio"
             };
             await callMedia.StartMediaStreamingAsync(startStreamingOptions);
 
-            _logger.LogInformation("Started bidirectional media streaming for call {CallConnectionId}", playCompleted.CallConnectionId);
+            _logger.LogInformation("Started bidirectional media streaming for call {CallConnectionId}", callConnected.CallConnectionId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error starting media streaming for call {CallConnectionId}", playCompleted.CallConnectionId);
+            _logger.LogError(ex, "Error starting media streaming for call {CallConnectionId}", callConnected.CallConnectionId);
         }
+    }
+
+    private async Task HandlePlayCompletedAsync(PlayCompleted playCompleted)
+    {
+        _logger.LogInformation("Play completed for call: {CallConnectionId}", playCompleted.CallConnectionId);
     }
 
     private void HandlePlayFailed(PlayFailed playFailed)

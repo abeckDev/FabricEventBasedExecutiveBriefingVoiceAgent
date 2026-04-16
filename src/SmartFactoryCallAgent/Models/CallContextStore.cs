@@ -34,4 +34,9 @@ public class CallContextStore
     {
         return _store.Values;
     }
+
+    public string? GetAnyActiveCallConnectionId()
+    {
+        return _store.Keys.FirstOrDefault();
+    }
 }

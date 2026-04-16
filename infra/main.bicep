@@ -106,8 +106,8 @@ resource gpt4oRealtimeDeployment 'Microsoft.CognitiveServices/accounts/deploymen
   properties: {
     model: {
       format: 'OpenAI'
-      name: 'gpt-4o-realtime-preview'
-      version: '2024-12-17'
+      name: 'gpt-realtime-1.5'
+      version: '2026-02-23'
     }
   }
 }
