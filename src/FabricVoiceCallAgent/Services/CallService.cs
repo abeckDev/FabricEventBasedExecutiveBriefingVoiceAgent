@@ -1,11 +1,10 @@
-using Azure;
 using Azure.Communication;
 using Azure.Communication.CallAutomation;
 using Microsoft.Extensions.Options;
-using SmartFactoryCallAgent.Configuration;
-using SmartFactoryCallAgent.Models;
+using FabricVoiceCallAgent.Configuration;
+using FabricVoiceCallAgent.Models;
 
-namespace SmartFactoryCallAgent.Services;
+namespace FabricVoiceCallAgent.Services;
 
 public class CallService
 {
@@ -24,19 +23,18 @@ public class CallService
     }
 
     public async Task<string?> PlaceCallWithSummaryAsync(
-        string managerPhoneNumber,
-        string execSummary)
+        string phoneNumber,
+        string execSummary,
+        AlertPayload? alert = null)
     {
         try
         {
             var client = new CallAutomationClient(_acsSettings.ConnectionString);
 
             var callbackUri = new Uri($"{_acsSettings.CallbackBaseUrl}/api/callbacks");
-            // Note: callConnectionId is not known yet, so ACS will connect to the WebSocket
-            // and the handler will need to extract it from the streaming metadata
             var wsTransportUri = new Uri($"{_acsSettings.CallbackBaseUrl.Replace("https://", "wss://").Replace("http://", "ws://")}/ws/audio");
 
-            var target = new PhoneNumberIdentifier(managerPhoneNumber);
+            var target = new PhoneNumberIdentifier(phoneNumber);
             var caller = new PhoneNumberIdentifier(_acsSettings.PhoneNumber);
             var callInvite = new CallInvite(target, caller);
 
@@ -64,14 +62,15 @@ public class CallService
             {
                 CallConnectionId = callConnectionId,
                 ExecSummary = execSummary,
-                ManagerPhoneNumber = managerPhoneNumber
+                PhoneNumber = phoneNumber,
+                Alert = alert
             });
 
             return callConnectionId;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error placing outbound call to {PhoneNumber}", managerPhoneNumber);
+            _logger.LogError(ex, "Error placing outbound call to {PhoneNumber}", phoneNumber);
             return null;
         }
     }

@@ -5,26 +5,28 @@ using System.Text.Json.Nodes;
 using Azure.Identity;
 using Azure.Core;
 using Microsoft.Extensions.Options;
-using SmartFactoryCallAgent.Configuration;
-using SmartFactoryCallAgent.Models;
-using SmartFactoryCallAgent.Services;
+using FabricVoiceCallAgent.Configuration;
+using FabricVoiceCallAgent.Models;
 
-namespace SmartFactoryCallAgent.Services;
+namespace FabricVoiceCallAgent.Services;
 
 public class AudioStreamingHandler
 {
     private readonly OpenAiSettings _openAiSettings;
+    private readonly VoiceAgentSettings _voiceAgentSettings;
     private readonly CallContextStore _callContextStore;
     private readonly FoundryAgentService _foundryAgentService;
     private readonly ILogger<AudioStreamingHandler> _logger;
 
     public AudioStreamingHandler(
         IOptions<OpenAiSettings> openAiSettings,
+        IOptions<VoiceAgentSettings> voiceAgentSettings,
         CallContextStore callContextStore,
         FoundryAgentService foundryAgentService,
         ILogger<AudioStreamingHandler> logger)
     {
         _openAiSettings = openAiSettings.Value;
+        _voiceAgentSettings = voiceAgentSettings.Value;
         _callContextStore = callContextStore;
         _foundryAgentService = foundryAgentService;
         _logger = logger;
@@ -79,12 +81,30 @@ public class AudioStreamingHandler
         var openAiWsUri = BuildOpenAiRealtimeUri();
         using var openAiWebSocket = new ClientWebSocket();
 
-        // Use managed identity for auth (local auth is disabled on the OpenAI resource)
-        var credential = new ManagedIdentityCredential("b4d2f012-83a3-4132-9e31-d50f875f57ce");
-        var tokenResult = await credential.GetTokenAsync(
-            new TokenRequestContext(new[] { "https://cognitiveservices.azure.com/.default" }), cancellationToken);
-        openAiWebSocket.Options.SetRequestHeader("Authorization", $"Bearer {tokenResult.Token}");
-        _logger.LogInformation("Obtained Azure AD token for OpenAI Realtime API");
+        // Use managed identity for auth if configured, otherwise try API key
+        if (!string.IsNullOrEmpty(_voiceAgentSettings.ManagedIdentityClientId))
+        {
+            var credential = new ManagedIdentityCredential(
+                ManagedIdentityId.FromUserAssignedClientId(_voiceAgentSettings.ManagedIdentityClientId));
+            var tokenResult = await credential.GetTokenAsync(
+                new TokenRequestContext(new[] { "https://cognitiveservices.azure.com/.default" }), cancellationToken);
+            openAiWebSocket.Options.SetRequestHeader("Authorization", $"Bearer {tokenResult.Token}");
+            _logger.LogInformation("Obtained Azure AD token for OpenAI Realtime API");
+        }
+        else if (!string.IsNullOrEmpty(_openAiSettings.ApiKey))
+        {
+            openAiWebSocket.Options.SetRequestHeader("api-key", _openAiSettings.ApiKey);
+            _logger.LogInformation("Using API key for OpenAI Realtime API");
+        }
+        else
+        {
+            // Try default credential
+            var credential = new DefaultAzureCredential();
+            var tokenResult = await credential.GetTokenAsync(
+                new TokenRequestContext(new[] { "https://cognitiveservices.azure.com/.default" }), cancellationToken);
+            openAiWebSocket.Options.SetRequestHeader("Authorization", $"Bearer {tokenResult.Token}");
+            _logger.LogInformation("Obtained default Azure AD token for OpenAI Realtime API");
+        }
 
         try
         {
@@ -138,7 +158,7 @@ public class AudioStreamingHandler
             {
                 modalities = new[] { "text", "audio" },
                 instructions = systemPrompt,
-                voice = "alloy",
+                voice = _openAiSettings.Voice,
                 input_audio_format = "pcm16",
                 output_audio_format = "pcm16",
                 turn_detection = new
@@ -153,8 +173,8 @@ public class AudioStreamingHandler
                     new
                     {
                         type = "function",
-                        name = "ask_factory_assistant",
-                        description = "Ask the factory data assistant a question about production data, machine telemetry, orders, KPIs, or supply chain risks. The assistant has access to the live factory database and will query it to answer the question.",
+                        name = "ask_data_assistant",
+                        description = _voiceAgentSettings.DataAssistantToolDescription,
                         parameters = new
                         {
                             type = "object",
@@ -163,7 +183,7 @@ public class AudioStreamingHandler
                                 question = new
                                 {
                                     type = "string",
-                                    description = "A natural language question about factory data, e.g. 'What are the active orders?' or 'Show me the vibration trend for machine M-202 in the last hour'"
+                                    description = "A natural language question about the data"
                                 }
                             },
                             required = new[] { "question" }
@@ -179,23 +199,10 @@ public class AudioStreamingHandler
         await openAiWs.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct);
     }
 
-    private static string BuildSystemPrompt(CallContext callContext)
+    private string BuildSystemPrompt(CallContext callContext)
     {
-        return $"""
-            You are a smart factory AI assistant calling a factory manager with an urgent alert.
-            
-            IMPORTANT: Start the conversation IMMEDIATELY by reading this executive summary aloud:
-            "{callContext.ExecSummary}"
-            
-            After reading the summary, say: "I'm here to answer any follow-up questions about this alert. What would you like to know?"
-            
-            You can answer follow-up questions from the manager about the machine anomaly, production impact,
-            and recommended actions. Use the ask_factory_assistant tool to fetch fresh data from the factory
-            database when needed.
-            
-            Be concise and professional. When the manager says "goodbye", "hang up", or "that's all", 
-            end the conversation politely.
-            """;
+        return _voiceAgentSettings.SystemPromptTemplate
+            .Replace("{ExecSummary}", callContext.ExecSummary);
     }
 
     private async Task ForwardAcsToOpenAiAsync(
@@ -332,7 +339,7 @@ public class AudioStreamingHandler
                          transcript.Contains("hang up", StringComparison.OrdinalIgnoreCase) ||
                          transcript.Contains("that's all", StringComparison.OrdinalIgnoreCase)))
                     {
-                        _logger.LogInformation("Manager requested hang up for call {CallConnectionId}", Sanitize(callConnectionId));
+                        _logger.LogInformation("User requested hang up for call {CallConnectionId}", Sanitize(callConnectionId));
                         _callContextStore.Remove(callConnectionId);
                     }
                     break;
@@ -354,7 +361,7 @@ public class AudioStreamingHandler
         var name = json["name"]?.GetValue<string>();
         var argumentsStr = json["arguments"]?.GetValue<string>();
 
-        if (name != "ask_factory_assistant" || string.IsNullOrEmpty(argumentsStr))
+        if (name != "ask_data_assistant" || string.IsNullOrEmpty(argumentsStr))
             return;
 
         string queryResult;
@@ -362,7 +369,7 @@ public class AudioStreamingHandler
         {
             var args = JsonNode.Parse(argumentsStr);
             var question = args?["question"]?.GetValue<string>() ?? string.Empty;
-            _logger.LogInformation("Forwarding question to factory assistant: {Question}", question[..Math.Min(question.Length, 100)]);
+            _logger.LogInformation("Forwarding question to data assistant: {Question}", question[..Math.Min(question.Length, 100)]);
 
             var callContext = _callContextStore.Get(callConnectionId);
             var execSummaryContext = callContext?.ExecSummary ?? string.Empty;
@@ -370,7 +377,7 @@ public class AudioStreamingHandler
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error calling factory assistant from function call");
+            _logger.LogError(ex, "Error calling data assistant from function call");
             queryResult = "I'm sorry, I was unable to retrieve that information right now.";
         }
 

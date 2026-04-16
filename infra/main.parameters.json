@@ -6,13 +6,13 @@
       "value": "swedencentral"
     },
     "environmentName": {
-      "value": "smartfactory-demo"
+      "value": "fabric-voice-demo"
     },
-    "managerPhoneNumber": {
-      "value": "+1234567890"
+    "defaultPhoneNumber": {
+      "value": "<DEFAULT_PHONE_NUMBER>"
     },
     "acsPhoneNumber": {
-      "value": "+33801150157"
+      "value": "<YOUR_ACS_PHONE_NUMBER>"
     },
     "foundryDataAgentConnectionId": {
       "value": "PENDING_DATA_AGENT_SETUP"

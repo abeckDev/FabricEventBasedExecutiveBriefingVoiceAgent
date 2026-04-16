@@ -6,9 +6,9 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "simulator", "simulator", "{
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartFactorySimulator", "simulator\SmartFactorySimulator\SmartFactorySimulator.csproj", "{54B4CE70-C72D-25B5-558C-2559886227D7}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AlertSimulator", "simulator\AlertSimulator\AlertSimulator.csproj", "{54B4CE70-C72D-25B5-558C-2559886227D7}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartFactoryCallAgent", "src\SmartFactoryCallAgent\SmartFactoryCallAgent.csproj", "{6BF52DB3-5ED1-5685-1109-166CC1FA1541}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FabricVoiceCallAgent", "src\FabricVoiceCallAgent\FabricVoiceCallAgent.csproj", "{6BF52DB3-5ED1-5685-1109-166CC1FA1541}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

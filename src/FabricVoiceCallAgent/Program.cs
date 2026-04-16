@@ -1,7 +1,6 @@
-using Microsoft.Extensions.Options;
-using SmartFactoryCallAgent.Configuration;
-using SmartFactoryCallAgent.Models;
-using SmartFactoryCallAgent.Services;
+using FabricVoiceCallAgent.Configuration;
+using FabricVoiceCallAgent.Models;
+using FabricVoiceCallAgent.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,6 +8,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<AcsSettings>(builder.Configuration.GetSection("Acs"));
 builder.Services.Configure<OpenAiSettings>(builder.Configuration.GetSection("OpenAi"));
 builder.Services.Configure<FoundrySettings>(builder.Configuration.GetSection("Foundry"));
+builder.Services.Configure<VoiceAgentSettings>(builder.Configuration.GetSection("VoiceAgent"));
 
 // Register services
 builder.Services.AddSingleton<CallContextStore>();

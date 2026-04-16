@@ -1,43 +1,38 @@
 using Azure.AI.Projects;
-using Azure;
+using Azure.Core;
 using Azure.Identity;
 using Microsoft.Extensions.Options;
-using SmartFactoryCallAgent.Configuration;
-using SmartFactoryCallAgent.Models;
+using FabricVoiceCallAgent.Configuration;
+using FabricVoiceCallAgent.Models;
 using System.Text;
 
-namespace SmartFactoryCallAgent.Services;
+namespace FabricVoiceCallAgent.Services;
 
 public class FoundryAgentService : IDisposable
 {
     private readonly FoundrySettings _settings;
+    private readonly VoiceAgentSettings _voiceAgentSettings;
     private readonly ILogger<FoundryAgentService> _logger;
 
     private Agent? _agent;
     private readonly SemaphoreSlim _agentLock = new(1, 1);
     private bool _disposed;
 
-    private const string AgentInstructions = """
-        You are a Smart Factory AI assistant that helps factory executives quickly understand machine anomalies and production impacts.
-        You have access to the live factory database through a connected Fabric Data Agent.
-        When asked to generate an executive summary or answer questions, query the Data Agent for up-to-date information.
-        Use clear, professional language suitable for a factory manager.
-        Keep spoken summaries to approximately 30 seconds (~75-90 words).
-        """;
-
-    public FoundryAgentService(IOptions<FoundrySettings> settings, ILogger<FoundryAgentService> logger)
+    public FoundryAgentService(
+        IOptions<FoundrySettings> settings, 
+        IOptions<VoiceAgentSettings> voiceAgentSettings,
+        ILogger<FoundryAgentService> logger)
     {
         _settings = settings.Value;
+        _voiceAgentSettings = voiceAgentSettings.Value;
         _logger = logger;
     }
 
-    public async Task<string> GenerateExecSummaryAsync(DataActivatorAlert alert)
+    public async Task<string> GenerateExecSummaryAsync(AlertPayload alert)
     {
         try
         {
-            // Build connection string for Azure AI Projects
-            var connectionString = $"{_settings.ProjectEndpoint};b814d650-0963-4701-9dc9-feffc970ad6a;AI_FoundryStandalone-Sandbox;aifoundry-sandbox";
-            var client = new AgentsClient(connectionString, new DefaultAzureCredential());
+            var client = CreateAgentsClient();
             var agent = await GetOrCreateAgentAsync(client);
 
             var threadResponse = await client.CreateThreadAsync();
@@ -97,9 +92,7 @@ public class FoundryAgentService : IDisposable
     {
         try
         {
-            // Build connection string for Azure AI Projects
-            var connectionString = $"{_settings.ProjectEndpoint};b814d650-0963-4701-9dc9-feffc970ad6a;AI_FoundryStandalone-Sandbox;aifoundry-sandbox";
-            var client = new AgentsClient(connectionString, new DefaultAzureCredential());
+            var client = CreateAgentsClient();
             var agent = await GetOrCreateAgentAsync(client);
 
             var threadResponse = await client.CreateThreadAsync();
@@ -107,16 +100,16 @@ public class FoundryAgentService : IDisposable
 
             try
             {
-                // Provide context from the exec summary already given to the manager
+                // Provide context from the exec summary already given to the user
                 var contextMessage = $"""
-                    Context: The following executive summary was already read to the factory manager:
+                    Context: The following executive summary was already read to the user:
                     {execSummaryContext}
 
-                    The manager may ask follow-up questions about this situation. Use the Data Agent to fetch fresh data as needed.
+                    The user may ask follow-up questions about this situation. Use the Data Agent to fetch fresh data as needed.
                     """;
                 await client.CreateMessageAsync(thread.Id, MessageRole.User, contextMessage);
 
-                // Add the manager's follow-up question
+                // Add the user's follow-up question
                 await client.CreateMessageAsync(thread.Id, MessageRole.User, question);
 
                 var runResponse = await client.CreateRunAsync(thread, agent);
@@ -132,7 +125,7 @@ public class FoundryAgentService : IDisposable
                 if (run.Status != RunStatus.Completed)
                 {
                     _logger.LogWarning("Follow-up agent run did not complete successfully. Status: {Status}", run.Status);
-                    return "I'm sorry, I was unable to retrieve that information right now. Please try again or contact the operations team directly.";
+                    return "I'm sorry, I was unable to retrieve that information right now. Please try again.";
                 }
 
                 var messagesResponse = await client.GetMessagesAsync(thread.Id, run.Id);
@@ -164,6 +157,27 @@ public class FoundryAgentService : IDisposable
         }
     }
 
+    private AgentsClient CreateAgentsClient()
+    {
+        // Use connection string if provided, otherwise construct from endpoint
+        var connectionString = !string.IsNullOrEmpty(_settings.ProjectConnectionString)
+            ? _settings.ProjectConnectionString
+            : _settings.ProjectEndpoint;
+
+        TokenCredential credential;
+        if (!string.IsNullOrEmpty(_voiceAgentSettings.ManagedIdentityClientId))
+        {
+            credential = new ManagedIdentityCredential(
+                ManagedIdentityId.FromUserAssignedClientId(_voiceAgentSettings.ManagedIdentityClientId));
+        }
+        else
+        {
+            credential = new DefaultAzureCredential();
+        }
+
+        return new AgentsClient(connectionString, credential);
+    }
+
     private async Task<Agent> GetOrCreateAgentAsync(AgentsClient client, CancellationToken cancellationToken = default)
     {
         if (_agent != null)
@@ -187,13 +201,13 @@ public class FoundryAgentService : IDisposable
             }
             else
             {
-                _logger.LogWarning("DataAgentConnectionId is not configured. Agent will not have access to factory data.");
+                _logger.LogWarning("DataAgentConnectionId is not configured. Agent will not have access to data.");
             }
 
             var agentResponse = await client.CreateAgentAsync(
                 model: _settings.ModelDeploymentName,
-                name: "SmartFactoryAssistant",
-                instructions: AgentInstructions,
+                name: _settings.AgentName,
+                instructions: _settings.AgentInstructions,
                 tools: toolDefinitions);
 
             _agent = agentResponse.Value;
@@ -206,31 +220,43 @@ public class FoundryAgentService : IDisposable
         }
     }
 
-    private static string BuildExecSummaryRequest(DataActivatorAlert alert)
+    private string BuildExecSummaryRequest(AlertPayload alert)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine("A machine anomaly alert has been triggered. Please:");
-        sb.AppendLine("1. Query the Data Agent for recent telemetry for the alerting machine (last 15 minutes)");
-        sb.AppendLine("2. Query for active production orders at the affected station");
-        sb.AppendLine("3. Query for current production KPIs");
-        sb.AppendLine("4. Query for any supply chain risks");
-        sb.AppendLine("5. Generate a concise ~30-second spoken executive summary for the factory manager covering: the anomaly, production impact, and recommended immediate actions.");
-        sb.AppendLine();
-        sb.AppendLine("Alert details:");
-        sb.AppendLine($"  Machine ID: {alert.MachineId}");
-        sb.AppendLine($"  Station: {alert.StationName}");
-        sb.AppendLine($"  Vibration: {alert.Vibration}g");
-        sb.AppendLine($"  Temperature: {alert.Temperature}°C");
-        sb.AppendLine($"  Timestamp: {alert.Timestamp:u}");
-        sb.AppendLine($"  Order ID: {alert.OrderId ?? "N/A"}");
-        return sb.ToString();
+        var template = _settings.SummaryRequestTemplate;
+        
+        return template
+            .Replace("{AlertType}", alert.AlertType ?? "N/A")
+            .Replace("{SourceId}", alert.SourceId ?? "N/A")
+            .Replace("{SourceName}", alert.SourceName ?? "N/A")
+            .Replace("{Severity}", alert.Severity ?? "N/A")
+            .Replace("{Title}", alert.Title ?? "N/A")
+            .Replace("{Description}", alert.Description ?? "N/A")
+            .Replace("{Timestamp}", alert.Timestamp?.ToString("u") ?? "N/A")
+            .Replace("{Metadata}", alert.GetMetadataSummary());
     }
 
-    private static string BuildFallbackSummary(DataActivatorAlert alert)
+    private static string BuildFallbackSummary(AlertPayload alert)
     {
-        return $"Attention: Machine {alert.MachineId} at {alert.StationName} has triggered a vibration alert at {alert.Vibration}g, " +
-               "exceeding the threshold. Immediate maintenance inspection is recommended. " +
-               "Please stay on the line to ask follow-up questions.";
+        var sb = new StringBuilder();
+        sb.Append($"Attention: An alert has been triggered");
+        
+        if (!string.IsNullOrEmpty(alert.SourceId))
+            sb.Append($" for {alert.SourceId}");
+        
+        if (!string.IsNullOrEmpty(alert.SourceName))
+            sb.Append($" at {alert.SourceName}");
+        
+        sb.Append(". ");
+        
+        if (!string.IsNullOrEmpty(alert.Title))
+            sb.Append($"{alert.Title}. ");
+        
+        if (!string.IsNullOrEmpty(alert.Description))
+            sb.Append($"{alert.Description} ");
+        
+        sb.Append("Immediate attention is recommended. Please stay on the line to ask follow-up questions.");
+        
+        return sb.ToString();
     }
 
     public void Dispose()

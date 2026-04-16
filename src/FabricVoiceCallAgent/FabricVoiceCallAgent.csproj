@@ -4,8 +4,8 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>SmartFactoryCallAgent</RootNamespace>
-    <AssemblyName>SmartFactoryCallAgent</AssemblyName>
+    <RootNamespace>FabricVoiceCallAgent</RootNamespace>
+    <AssemblyName>FabricVoiceCallAgent</AssemblyName>
     <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
   </PropertyGroup>
 

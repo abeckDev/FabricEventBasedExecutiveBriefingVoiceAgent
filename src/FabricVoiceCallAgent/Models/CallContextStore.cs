@@ -1,12 +1,13 @@
 using System.Collections.Concurrent;
 
-namespace SmartFactoryCallAgent.Models;
+namespace FabricVoiceCallAgent.Models;
 
 public class CallContext
 {
     public string CallConnectionId { get; set; } = string.Empty;
     public string ExecSummary { get; set; } = string.Empty;
-    public string ManagerPhoneNumber { get; set; } = string.Empty;
+    public string PhoneNumber { get; set; } = string.Empty;
+    public AlertPayload? Alert { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 

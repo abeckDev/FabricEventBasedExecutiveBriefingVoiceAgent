@@ -4,8 +4,8 @@ param location string = resourceGroup().location
 @description('Environment name used to generate unique resource names')
 param environmentName string
 
-@description('Manager on-duty phone number for outbound PSTN calls (E.164 format, e.g. +14255550100)')
-param managerPhoneNumber string
+@description('Default phone number for outbound PSTN calls (E.164 format, e.g. +14255550100)')
+param defaultPhoneNumber string
 
 @description('ACS phone number for outbound caller ID (E.164 format, e.g. +14255550199)')
 param acsPhoneNumber string
@@ -13,7 +13,7 @@ param acsPhoneNumber string
 @description('Connection ID of the Fabric Data Agent in the AI Foundry project used for data grounding')
 param foundryDataAgentConnectionId string
 
-@description('Container image to deploy (e.g. ghcr.io/yourorg/smartfactorycallagent:latest)')
+@description('Container image to deploy (e.g. ghcr.io/yourorg/fabricvoicecallagent:latest)')
 param containerImage string = 'mcr.microsoft.com/dotnet/samples:aspnetapp'
 
 var resourceToken = toLower(uniqueString(subscription().id, resourceGroup().id, environmentName))
@@ -137,7 +137,7 @@ resource aiHub 'Microsoft.MachineLearningServices/workspaces@2024-04-01' = {
     tier: 'Basic'
   }
   properties: {
-    friendlyName: 'Smart Factory AI Hub'
+    friendlyName: 'Fabric Voice Agent AI Hub'
     publicNetworkAccess: 'Enabled'
   }
 }
@@ -155,7 +155,7 @@ resource aiProject 'Microsoft.MachineLearningServices/workspaces@2024-04-01' = {
     tier: 'Basic'
   }
   properties: {
-    friendlyName: 'Smart Factory Project'
+    friendlyName: 'Fabric Voice Agent Project'
     hubResourceId: aiHub.id
     publicNetworkAccess: 'Enabled'
   }
@@ -197,7 +197,7 @@ resource containerAppsEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: 'ca-${resourceToken}'
   location: location
-  tags: union(tags, { 'azd-service-name': 'SmartFactoryCallAgent' })
+  tags: union(tags, { 'azd-service-name': 'FabricVoiceCallAgent' })
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
@@ -229,7 +229,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
     template: {
       containers: [
         {
-          name: 'smartfactorycallagent'
+          name: 'fabricvoicecallagent'
           image: containerImage
           resources: {
             cpu: json('0.5')
@@ -273,8 +273,12 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: foundryDataAgentConnectionId
             }
             {
-              name: 'ManagerPhoneNumber'
-              value: managerPhoneNumber
+              name: 'VoiceAgent__DefaultPhoneNumber'
+              value: defaultPhoneNumber
+            }
+            {
+              name: 'VoiceAgent__ManagedIdentityClientId'
+              value: managedIdentity.properties.clientId
             }
           ]
         }

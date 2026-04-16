@@ -14,7 +14,7 @@ env:
 
 jobs:
   build:
-    name: Build SmartFactoryCallAgent
+    name: Build FabricVoiceCallAgent
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -30,13 +30,13 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore dependencies
-        run: dotnet restore src/SmartFactoryCallAgent/SmartFactoryCallAgent.csproj
+        run: dotnet restore src/FabricVoiceCallAgent/FabricVoiceCallAgent.csproj
 
       - name: Build
-        run: dotnet build src/SmartFactoryCallAgent/SmartFactoryCallAgent.csproj --no-restore --configuration Release
+        run: dotnet build src/FabricVoiceCallAgent/FabricVoiceCallAgent.csproj --no-restore --configuration Release
 
       - name: Build Simulator
-        run: dotnet build simulator/SmartFactorySimulator/SmartFactorySimulator.csproj --configuration Release
+        run: dotnet build simulator/AlertSimulator/AlertSimulator.csproj --configuration Release
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
@@ -60,8 +60,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: ./src/SmartFactoryCallAgent
-          file: ./src/SmartFactoryCallAgent/Dockerfile
+          context: ./src/FabricVoiceCallAgent
+          file: ./src/FabricVoiceCallAgent/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
