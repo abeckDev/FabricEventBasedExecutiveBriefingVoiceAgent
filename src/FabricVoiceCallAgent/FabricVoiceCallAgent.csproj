@@ -10,9 +10,15 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      Azure.AI.Agents.Persistent is the modern GA SDK for account-based Azure AI Foundry
+      projects (endpoints of the form https://<resource>.services.ai.azure.com/api/projects/<project>).
+      The 1.2.0-beta.x line is required for the Microsoft Fabric tool definition used to
+      connect the agent to a Fabric Data Agent.
+    -->
+    <PackageReference Include="Azure.AI.Agents.Persistent" Version="1.2.0-beta.10" />
     <PackageReference Include="Azure.Communication.CallAutomation" Version="1.5.1" />
     <PackageReference Include="Azure.Communication.Common" Version="1.4.0" />
-    <PackageReference Include="Azure.AI.Projects" Version="1.0.0-beta.3" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.15" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.9.0" />

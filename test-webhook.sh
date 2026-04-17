@@ -5,7 +5,7 @@
 # ============================================================
 
 # Update these values for your deployment
-WEBHOOK_URL="https://YOUR_CONTAINER_APP/api/alert"
+WEBHOOK_URL="https://<your-container-app>.azurecontainerapps.io/api/alert"
 PHONE_NUMBER="+1234567890"
 
 echo "📞 Fabric Voice Call Agent - Test Script"
@@ -20,11 +20,11 @@ echo ""
 curl -X POST "$WEBHOOK_URL" \
   -H "Content-Type: application/json" \
   -d '{
-    "sourceId": "SENSOR-001",
-    "sourceName": "Location-A",
+    "sourceId": "ORD-B61C8729",
+    "sourceName": "CUST-BRAVO",
     "alertType": "Threshold",
     "severity": "High",
-    "title": "Metric Threshold Exceeded",
+    "title": "Order is jeopardized",
     "description": "A critical threshold has been exceeded and requires immediate attention.",
     "timestamp": "2024-01-15T14:30:00Z",
     "phoneNumber": "'"$PHONE_NUMBER"'",

@@ -18,15 +18,10 @@ public class OpenAiSettings
 public class FoundrySettings
 {
     /// <summary>
-    /// AI Foundry project endpoint (discovery URL)
+    /// Azure AI Foundry project endpoint (account-based project), in the form
+    /// <c>https://&lt;resource&gt;.services.ai.azure.com/api/projects/&lt;project-name&gt;</c>.
     /// </summary>
     public string ProjectEndpoint { get; set; } = string.Empty;
-
-    /// <summary>
-    /// AI Foundry project connection string (format: endpoint;subscription;resourcegroup;project)
-    /// If provided, this takes precedence over constructing from ProjectEndpoint
-    /// </summary>
-    public string? ProjectConnectionString { get; set; }
 
     /// <summary>
     /// Model deployment name for the Foundry Agent (e.g., gpt-4o)
@@ -34,7 +29,14 @@ public class FoundrySettings
     public string ModelDeploymentName { get; set; } = "gpt-4o";
 
     /// <summary>
-    /// Connection ID of the Fabric Data Agent in the AI Foundry project
+    /// ID of a pre-existing Foundry Agent to reuse. When set, the service
+    /// retrieves this agent instead of creating a new one each session.
+    /// </summary>
+    public string AgentId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Connection ID of the Fabric Data Agent in the AI Foundry project.
+    /// Only used when AgentId is empty (i.e. creating a new agent).
     /// </summary>
     public string DataAgentConnectionId { get; set; } = string.Empty;
 
@@ -71,9 +73,14 @@ public class FoundrySettings
     /// - {Metadata}: Additional metadata as key=value pairs
     /// </summary>
     public string SummaryRequestTemplate { get; set; } = """
-        An alert has been triggered. Please:
-        1. Query the Data Agent for relevant context and recent data
-        2. Generate a concise ~30-second spoken executive summary covering: the alert, impact assessment, and recommended immediate actions.
+        A webhook alert has been triggered. You MUST use the Data Agent tool to answer — do NOT make up data.
+
+        Follow these steps in order:
+        1. Query the Data Agent for the current overall production status, any ongoing disruptions, anomalies, or problems.
+        2. Then try to find information specifically related to the alert details below (source ID, source name, description).
+        3. Generate a concise ~30-second spoken executive summary:
+           - If you found data matching the alert: summarize the issue, its impact based on real data, and recommended actions.
+           - If no matching data was found for the specific alert: report that a webhook notification was received, but after checking with the production data, no corresponding issue was confirmed. Then briefly summarize the current overall production status you retrieved in step 1.
 
         Alert details:
           Type: {AlertType}

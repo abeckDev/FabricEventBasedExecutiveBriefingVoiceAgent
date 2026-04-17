@@ -114,12 +114,25 @@ if [[ -z "${EXISTING_OPENAI_ENDPOINT:-}" ]] && [[ "$INTERACTIVE" == true ]]; the
 fi
 
 # Optional: Foundry / Data Agent
-if [[ -z "${FOUNDRY_DATA_AGENT_CONNECTION_ID:-}" ]] && [[ "$INTERACTIVE" == true ]]; then
+if [[ -z "${FOUNDRY_PROJECT_ENDPOINT:-}" ]] && [[ "$INTERACTIVE" == true ]]; then
   read -rp "  Configure AI Foundry / Fabric Data Agent now? (y/N): " config_foundry
   if [[ "$config_foundry" =~ ^[Yy] ]]; then
-    prompt_var FOUNDRY_PROJECT_CONNECTION_STRING "Foundry project connection string (endpoint;sub;rg;project)"
-    prompt_var FOUNDRY_DATA_AGENT_CONNECTION_ID  "Fabric Data Agent connection ID"
-    prompt_var FOUNDRY_MODEL_DEPLOYMENT          "Foundry model deployment name" "gpt-4o"
+    prompt_var FOUNDRY_PROJECT_ENDPOINT          "Foundry project endpoint (https://<resource>.services.ai.azure.com/api/projects/<project>)"
+
+    # Agent reuse vs creation
+    if [[ -z "${FOUNDRY_AGENT_ID:-}" ]]; then
+      read -rp "  Reuse a pre-existing Foundry Agent? (y/N): " reuse_agent
+      if [[ "$reuse_agent" =~ ^[Yy] ]]; then
+        prompt_var FOUNDRY_AGENT_ID "Foundry Agent ID (asst_... format)"
+      fi
+    fi
+
+    # Only ask for Data Agent connection & model if not reusing an existing agent
+    if [[ -z "${FOUNDRY_AGENT_ID:-}" ]]; then
+      prompt_var FOUNDRY_DATA_AGENT_CONNECTION_ID  "Fabric Data Agent connection ID"
+      prompt_var FOUNDRY_MODEL_DEPLOYMENT          "Foundry model deployment name" "gpt-4o"
+    fi
+
     read -rp "  Foundry resource ID for RBAC (leave blank to skip): " foundry_rid
     if [[ -n "$foundry_rid" ]]; then
       EXISTING_FOUNDRY_RESOURCE_ID="$foundry_rid"
@@ -420,7 +433,7 @@ az containerapp create \
     "OpenAi__DeploymentName=${OPENAI_DEPLOYMENT_NAME:-gpt-realtime}" \
     "OpenAi__Voice=${OPENAI_VOICE:-alloy}" \
     "Foundry__ProjectEndpoint=${FOUNDRY_PROJECT_ENDPOINT:-}" \
-    "Foundry__ProjectConnectionString=${FOUNDRY_PROJECT_CONNECTION_STRING:-}" \
+    "Foundry__AgentId=${FOUNDRY_AGENT_ID:-}" \
     "Foundry__ModelDeploymentName=${FOUNDRY_MODEL_DEPLOYMENT:-gpt-4o}" \
     "Foundry__DataAgentConnectionId=${FOUNDRY_DATA_AGENT_CONNECTION_ID:-}" \
     "VoiceAgent__DefaultPhoneNumber=${DEFAULT_PHONE_NUMBER}" \
@@ -436,6 +449,14 @@ CA_FQDN=$(az containerapp show \
 # ─── 10. Grant Foundry RBAC (if using existing AI Foundry) ──────────────────
 if [[ -n "${EXISTING_FOUNDRY_RESOURCE_ID:-}" ]]; then
   echo "▶ Granting managed identity access to AI Foundry project..."
+  # Azure AI User is required for agent data-plane operations (agents/write, threads, runs)
+  az role assignment create \
+    --assignee-object-id "$MI_PRINCIPAL_ID" \
+    --assignee-principal-type ServicePrincipal \
+    --role "Azure AI User" \
+    --scope "$EXISTING_FOUNDRY_RESOURCE_ID" \
+    --output none 2>/dev/null || true
+  # Azure AI Developer for broader project management operations (kept for compatibility)
   az role assignment create \
     --assignee-object-id "$MI_PRINCIPAL_ID" \
     --assignee-principal-type ServicePrincipal \

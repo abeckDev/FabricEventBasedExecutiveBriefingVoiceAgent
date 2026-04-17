@@ -74,30 +74,51 @@ This building block can power voice calling for various Fabric demos:
 
 ### 1. Deploy Infrastructure
 
+Copy the environment template file and fill in your values:
+
 ```bash
-az deployment group create \
-  --resource-group rg-fabric-voice-demo \
-  --template-file infra/main.bicep \
-  --parameters infra/main.parameters.json \
-  --parameters environmentName=fabric-voice-demo \
-               defaultPhoneNumber="+14255550100" \
-               acsPhoneNumber="+14255550199" \
-               foundryDataAgentConnectionId="<your-data-agent-connection-id>"
+cp deploy.env.template deploy.env
+# Edit deploy.env with your values
 ```
+
+Then run the deployment script:
+
+```bash
+./deploy.sh
+```
+
+The script is interactive and will prompt for any missing values. It creates all required Azure resources (Resource Group, Managed Identity, Key Vault, ACS, Azure OpenAI, Container Registry, Container App) and deploys the application.
 
 ### 2. Configure for Your Scenario
 
-Update `appsettings.json` or environment variables to customize the agent behavior:
+Update `appsettings.json` or environment variables to customize the agent behavior.
+
+#### Option A: Reuse a Pre-existing Foundry Agent (Recommended)
+
+If you already have an agent configured in AI Foundry with the correct Fabric Data Agent connection, set the `AgentId` to reuse it instead of creating a new one per session:
 
 ```json
 {
   "Foundry": {
-    "AgentInstructions": "You are an AI assistant for [YOUR DOMAIN]. You have access to live data through a connected Fabric Data Agent...",
+    "ProjectEndpoint": "https://<resource>.services.ai.azure.com/api/projects/<project>",
+    "AgentId": "asst_abc123..."
+  }
+}
+```
+
+> **Note:** The `AgentId` must be in `asst_...` format (OpenAI Assistants API). Agents created in the Foundry Agent Builder UI use a different API and cannot be referenced directly. You can create an equivalent assistant via the Assistants API with the same instructions and Fabric Data Agent connection.
+
+#### Option B: Create Agent On-the-Fly
+
+Leave `AgentId` empty and configure the agent creation parameters:
+
+```json
+{
+  "Foundry": {
+    "ProjectEndpoint": "https://<resource>.services.ai.azure.com/api/projects/<project>",
+    "DataAgentConnectionId": "<your-data-agent-connection-id>",
+    "AgentInstructions": "You are an AI assistant for [YOUR DOMAIN]...",
     "SummaryRequestTemplate": "An alert has been triggered. Please query the Data Agent for [YOUR SPECIFIC QUERIES]..."
-  },
-  "VoiceAgent": {
-    "SystemPromptTemplate": "You are calling a user about [YOUR SCENARIO]...",
-    "DataAssistantToolDescription": "Ask questions about [YOUR DATA DOMAIN]..."
   }
 }
 ```
@@ -151,9 +172,9 @@ The `AlertPayload` model is designed to be flexible:
 | OpenAI API Key | `OpenAi__ApiKey` | Azure OpenAI API key (optional with managed identity) |
 | OpenAI Deployment | `OpenAi__DeploymentName` | Deployment name (default: gpt-4o-realtime) |
 | OpenAI Voice | `OpenAi__Voice` | Voice for TTS (default: alloy) |
-| Foundry Project Endpoint | `Foundry__ProjectEndpoint` | AI Foundry project discovery URL |
-| Foundry Connection String | `Foundry__ProjectConnectionString` | Full connection string (alternative) |
-| Data Agent Connection ID | `Foundry__DataAgentConnectionId` | Connection ID of Fabric Data Agent |
+| Foundry Project Endpoint | `Foundry__ProjectEndpoint` | AI Foundry project endpoint (`https://<resource>.services.ai.azure.com/api/projects/<project>`) |
+| Foundry Agent ID | `Foundry__AgentId` | ID of a pre-existing agent to reuse (`asst_...` format). When set, skips agent creation |
+| Data Agent Connection ID | `Foundry__DataAgentConnectionId` | Connection ID of Fabric Data Agent (only needed when `AgentId` is empty) |
 | Agent Name | `Foundry__AgentName` | Name for the Foundry Agent |
 | Agent Instructions | `Foundry__AgentInstructions` | System instructions for the agent |
 | Summary Template | `Foundry__SummaryRequestTemplate` | Template for generating summaries |
@@ -175,7 +196,26 @@ The `AlertPayload` model is designed to be flexible:
 1. In Azure AI Foundry, go to **Settings** → **Connected resources**
 2. Add a **Microsoft Fabric** connection
 3. Copy the **Connection ID**
-4. Set `Foundry__DataAgentConnectionId` to this value
+
+### 3. Configure the Application
+
+**Option A — Reuse a pre-existing agent (recommended):**
+
+Create an agent in AI Foundry (via the Assistants API) that includes a `fabric_dataagent` tool with your Fabric connection. Set `Foundry__AgentId` to the resulting `asst_...` ID.
+
+**Option B — Let the app create one:**
+
+Set `Foundry__DataAgentConnectionId` to the connection ID from step 2.
+
+### 4. Grant Fabric Permissions to Managed Identity
+
+The Container App's managed identity must have access to the Fabric workspace where your data resides. In the Fabric portal:
+
+1. Open your **Fabric workspace** → **Manage access**
+2. Add the managed identity (by Client ID or name) with at least **Viewer** role
+3. Ensure the Data Agent's underlying data sources are also accessible to the identity
+
+> **Important:** Without this step, the Foundry Agent can connect to the Data Agent but cannot retrieve data. The agent will report that it "couldn't retrieve data" even though the connection appears configured correctly.
 
 ## Triggering from Fabric
 
@@ -238,6 +278,9 @@ ngrok http 5000
 
 ```
 /
+├── deploy.sh                           # Automated deployment script
+├── deploy.env.template                 # Configuration template
+├── test-webhook.sh                     # Test script
 ├── src/FabricVoiceCallAgent/           # Main application
 │   ├── Controllers/
 │   │   ├── AlertController.cs          # POST /api/alert
@@ -251,9 +294,7 @@ ngrok http 5000
 │   │   └── CallContextStore.cs         # Call state management
 │   └── Configuration/
 │       └── AppSettings.cs              # Configuration classes
-├── simulator/AlertSimulator/           # Test event generator
-├── infra/                              # Azure Bicep templates
-└── kql/                                # Sample KQL scripts
+└── README.md
 ```
 
 ## Troubleshooting
@@ -269,9 +310,16 @@ ngrok http 5000
 - Ensure WebSocket connections are allowed
 
 ### Foundry Agent not responding
-- Verify Data Agent connection ID is correct
-- Check AI Foundry project endpoint
-- Ensure managed identity has access to Fabric workspace
+- Verify the `Foundry__ProjectEndpoint` is set correctly
+- If using `Foundry__AgentId`: ensure the ID is in `asst_...` format (not agent names like `MyAgent` or versioned IDs like `MyAgent:4`)
+- If creating on-the-fly: verify `Foundry__DataAgentConnectionId` is correct
+- Check that the managed identity has `Azure AI User` role on the AI Foundry project
+
+### Agent returns "couldn't retrieve data"
+- The managed identity must have access to the **Fabric workspace** (not just the AI Foundry project)
+- In Fabric: Workspace → Manage access → Add the managed identity with Viewer role
+- Verify the Data Agent's underlying data sources are accessible to the identity
+- Test the agent directly with your user credentials (via curl or AI Foundry UI) to confirm data access works
 
 ## License
 

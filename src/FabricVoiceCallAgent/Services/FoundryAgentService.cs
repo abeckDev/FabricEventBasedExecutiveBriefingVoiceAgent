@@ -1,4 +1,4 @@
-using Azure.AI.Projects;
+using Azure.AI.Agents.Persistent;
 using Azure.Core;
 using Azure.Identity;
 using Microsoft.Extensions.Options;
@@ -8,18 +8,23 @@ using System.Text;
 
 namespace FabricVoiceCallAgent.Services;
 
+/// <summary>
+/// Talks to an Azure AI Foundry (account-based) project via the modern
+/// <see cref="PersistentAgentsClient"/> and a Microsoft Fabric Data Agent tool.
+/// </summary>
 public class FoundryAgentService : IDisposable
 {
     private readonly FoundrySettings _settings;
     private readonly VoiceAgentSettings _voiceAgentSettings;
     private readonly ILogger<FoundryAgentService> _logger;
 
-    private Agent? _agent;
+    private PersistentAgentsClient? _client;
+    private PersistentAgent? _agent;
     private readonly SemaphoreSlim _agentLock = new(1, 1);
     private bool _disposed;
 
     public FoundryAgentService(
-        IOptions<FoundrySettings> settings, 
+        IOptions<FoundrySettings> settings,
         IOptions<VoiceAgentSettings> voiceAgentSettings,
         ILogger<FoundryAgentService> logger)
     {
@@ -32,54 +37,12 @@ public class FoundryAgentService : IDisposable
     {
         try
         {
-            var client = CreateAgentsClient();
+            var client = GetClient();
             var agent = await GetOrCreateAgentAsync(client);
 
-            var threadResponse = await client.CreateThreadAsync();
-            var thread = threadResponse.Value;
-
-            try
-            {
-                var userMessage = BuildExecSummaryRequest(alert);
-                await client.CreateMessageAsync(thread.Id, MessageRole.User, userMessage);
-
-                var runResponse = await client.CreateRunAsync(thread, agent);
-                var run = runResponse.Value;
-
-                while (run.Status == RunStatus.Queued || run.Status == RunStatus.InProgress)
-                {
-                    await Task.Delay(500);
-                    var runRefresh = await client.GetRunAsync(thread.Id, run.Id);
-                    run = runRefresh.Value;
-                }
-
-                if (run.Status != RunStatus.Completed)
-                {
-                    _logger.LogWarning("Agent run did not complete successfully. Status: {Status}", run.Status);
-                    return BuildFallbackSummary(alert);
-                }
-
-                var messagesResponse = await client.GetMessagesAsync(thread.Id, run.Id);
-                var assistantMessage = messagesResponse.Value.Data
-                    .Where(m => m.Role == MessageRole.Agent)
-                    .OrderByDescending(m => m.CreatedAt)
-                    .FirstOrDefault();
-
-                if (assistantMessage?.ContentItems != null)
-                {
-                    var textContent = assistantMessage.ContentItems
-                        .OfType<MessageTextContent>()
-                        .FirstOrDefault();
-                    if (textContent != null)
-                        return textContent.Text;
-                }
-
-                return BuildFallbackSummary(alert);
-            }
-            finally
-            {
-                try { await client.DeleteThreadAsync(thread.Id); } catch (Exception ex) { _logger.LogDebug(ex, "Failed to delete thread {ThreadId} during cleanup", thread.Id); }
-            }
+            var userMessage = BuildExecSummaryRequest(alert);
+            var result = await RunAgentAsync(client, agent, userMessage);
+            return result ?? BuildFallbackSummary(alert);
         }
         catch (Exception ex)
         {
@@ -92,63 +55,18 @@ public class FoundryAgentService : IDisposable
     {
         try
         {
-            var client = CreateAgentsClient();
+            var client = GetClient();
             var agent = await GetOrCreateAgentAsync(client);
 
-            var threadResponse = await client.CreateThreadAsync();
-            var thread = threadResponse.Value;
+            var primer = $"""
+                Context: The following executive summary was already read to the user:
+                {execSummaryContext}
 
-            try
-            {
-                // Provide context from the exec summary already given to the user
-                var contextMessage = $"""
-                    Context: The following executive summary was already read to the user:
-                    {execSummaryContext}
+                The user may ask follow-up questions about this situation. Use the Data Agent to fetch fresh data as needed.
+                """;
 
-                    The user may ask follow-up questions about this situation. Use the Data Agent to fetch fresh data as needed.
-                    """;
-                await client.CreateMessageAsync(thread.Id, MessageRole.User, contextMessage);
-
-                // Add the user's follow-up question
-                await client.CreateMessageAsync(thread.Id, MessageRole.User, question);
-
-                var runResponse = await client.CreateRunAsync(thread, agent);
-                var run = runResponse.Value;
-
-                while (run.Status == RunStatus.Queued || run.Status == RunStatus.InProgress)
-                {
-                    await Task.Delay(500);
-                    var runRefresh = await client.GetRunAsync(thread.Id, run.Id);
-                    run = runRefresh.Value;
-                }
-
-                if (run.Status != RunStatus.Completed)
-                {
-                    _logger.LogWarning("Follow-up agent run did not complete successfully. Status: {Status}", run.Status);
-                    return "I'm sorry, I was unable to retrieve that information right now. Please try again.";
-                }
-
-                var messagesResponse = await client.GetMessagesAsync(thread.Id, run.Id);
-                var assistantMessage = messagesResponse.Value.Data
-                    .Where(m => m.Role == MessageRole.Agent)
-                    .OrderByDescending(m => m.CreatedAt)
-                    .FirstOrDefault();
-
-                if (assistantMessage?.ContentItems != null)
-                {
-                    var textContent = assistantMessage.ContentItems
-                        .OfType<MessageTextContent>()
-                        .FirstOrDefault();
-                    if (textContent != null)
-                        return textContent.Text;
-                }
-
-                return "I'm sorry, I could not generate a response to your question.";
-            }
-            finally
-            {
-                try { await client.DeleteThreadAsync(thread.Id); } catch (Exception ex) { _logger.LogDebug(ex, "Failed to delete thread {ThreadId} during cleanup", thread.Id); }
-            }
+            var result = await RunAgentAsync(client, agent, primer, question);
+            return result ?? "I'm sorry, I could not generate a response to your question.";
         }
         catch (Exception ex)
         {
@@ -157,46 +75,115 @@ public class FoundryAgentService : IDisposable
         }
     }
 
-    private AgentsClient CreateAgentsClient()
+    private async Task<string?> RunAgentAsync(
+        PersistentAgentsClient client,
+        PersistentAgent agent,
+        params string[] userMessages)
     {
-        // Use connection string if provided, otherwise construct from endpoint
-        var connectionString = !string.IsNullOrEmpty(_settings.ProjectConnectionString)
-            ? _settings.ProjectConnectionString
-            : _settings.ProjectEndpoint;
+        var thread = (await client.Threads.CreateThreadAsync()).Value;
 
-        TokenCredential credential;
-        if (!string.IsNullOrEmpty(_voiceAgentSettings.ManagedIdentityClientId))
+        try
         {
-            credential = new ManagedIdentityCredential(
-                ManagedIdentityId.FromUserAssignedClientId(_voiceAgentSettings.ManagedIdentityClientId!));
-        }
-        else
-        {
-            credential = new DefaultAzureCredential();
-        }
+            foreach (var msg in userMessages)
+            {
+                await client.Messages.CreateMessageAsync(thread.Id, MessageRole.User, msg);
+            }
 
-        return new AgentsClient(connectionString, credential);
+            var run = (await client.Runs.CreateRunAsync(thread, agent)).Value;
+
+            while (run.Status == RunStatus.Queued || run.Status == RunStatus.InProgress)
+            {
+                await Task.Delay(500);
+                run = (await client.Runs.GetRunAsync(thread.Id, run.Id)).Value;
+            }
+
+            if (run.Status != RunStatus.Completed)
+            {
+                _logger.LogWarning("Agent run did not complete successfully. Status: {Status}, LastError: {Error}",
+                    run.Status, run.LastError?.Message);
+                return null;
+            }
+
+            // Newest first; take the most recent assistant text.
+            var messages = client.Messages.GetMessages(
+                threadId: thread.Id,
+                runId: run.Id,
+                order: ListSortOrder.Descending);
+
+            foreach (var m in messages)
+            {
+                if (m.Role != MessageRole.Agent) continue;
+
+                foreach (var part in m.ContentItems)
+                {
+                    if (part is MessageTextContent text && !string.IsNullOrWhiteSpace(text.Text))
+                        return text.Text;
+                }
+            }
+
+            return null;
+        }
+        finally
+        {
+            try { await client.Threads.DeleteThreadAsync(thread.Id); }
+            catch (Exception ex) { _logger.LogDebug(ex, "Failed to delete thread {ThreadId}", thread.Id); }
+        }
     }
 
-    private async Task<Agent> GetOrCreateAgentAsync(AgentsClient client, CancellationToken cancellationToken = default)
+    private PersistentAgentsClient GetClient()
     {
-        if (_agent != null)
-            return _agent;
+        if (_client != null) return _client;
+
+        if (string.IsNullOrWhiteSpace(_settings.ProjectEndpoint))
+        {
+            throw new InvalidOperationException(
+                "Foundry:ProjectEndpoint is not configured. Expected form: " +
+                "https://<resource>.services.ai.azure.com/api/projects/<project-name>");
+        }
+
+        TokenCredential credential = !string.IsNullOrEmpty(_voiceAgentSettings.ManagedIdentityClientId)
+            ? new ManagedIdentityCredential(
+                ManagedIdentityId.FromUserAssignedClientId(_voiceAgentSettings.ManagedIdentityClientId!))
+            : new DefaultAzureCredential();
+
+        _client = new PersistentAgentsClient(_settings.ProjectEndpoint, credential);
+        return _client;
+    }
+
+    private async Task<PersistentAgent> GetOrCreateAgentAsync(
+        PersistentAgentsClient client,
+        CancellationToken cancellationToken = default)
+    {
+        if (_agent != null) return _agent;
 
         await _agentLock.WaitAsync(cancellationToken);
         try
         {
-            if (_agent != null)
-                return _agent;
+            if (_agent != null) return _agent;
 
-            var toolDefinitions = new List<ToolDefinition>();
+            // If a pre-existing agent ID is configured, retrieve it instead of creating a new one.
+            if (!string.IsNullOrEmpty(_settings.AgentId))
+            {
+                var response = await client.Administration.GetAgentAsync(
+                    _settings.AgentId, cancellationToken);
+                _agent = response.Value;
+                _logger.LogInformation(
+                    "Using pre-existing Foundry Agent: {AgentId} ({AgentName})",
+                    _agent.Id, _agent.Name);
+                return _agent;
+            }
+
+            // Fall back to creating a new agent when no AgentId is configured.
+            var tools = new List<ToolDefinition>();
 
             if (!string.IsNullOrEmpty(_settings.DataAgentConnectionId))
             {
-                var connectionList = new ToolConnectionList();
-                connectionList.ConnectionList.Add(new ToolConnection(_settings.DataAgentConnectionId));
-                toolDefinitions.Add(new MicrosoftFabricToolDefinition(connectionList));
-                _logger.LogInformation("Configured Foundry Agent with Fabric Data Agent connection: {ConnectionId}",
+                var fabricParams = new FabricDataAgentToolParameters();
+                fabricParams.ConnectionList.Add(new ToolConnection(_settings.DataAgentConnectionId));
+                tools.Add(new MicrosoftFabricToolDefinition(fabricParams));
+
+                _logger.LogInformation(
+                    "Configured Foundry Agent with Fabric Data Agent connection: {ConnectionId}",
                     _settings.DataAgentConnectionId);
             }
             else
@@ -204,13 +191,14 @@ public class FoundryAgentService : IDisposable
                 _logger.LogWarning("DataAgentConnectionId is not configured. Agent will not have access to data.");
             }
 
-            var agentResponse = await client.CreateAgentAsync(
+            var response2 = await client.Administration.CreateAgentAsync(
                 model: _settings.ModelDeploymentName,
                 name: _settings.AgentName,
                 instructions: _settings.AgentInstructions,
-                tools: toolDefinitions);
+                tools: tools,
+                cancellationToken: cancellationToken);
 
-            _agent = agentResponse.Value;
+            _agent = response2.Value;
             _logger.LogInformation("Created Foundry Agent: {AgentId}", _agent.Id);
             return _agent;
         }
@@ -222,9 +210,7 @@ public class FoundryAgentService : IDisposable
 
     private string BuildExecSummaryRequest(AlertPayload alert)
     {
-        var template = _settings.SummaryRequestTemplate;
-        
-        return template
+        return _settings.SummaryRequestTemplate
             .Replace("{AlertType}", alert.AlertType ?? "N/A")
             .Replace("{SourceId}", alert.SourceId ?? "N/A")
             .Replace("{SourceName}", alert.SourceName ?? "N/A")
@@ -238,34 +224,30 @@ public class FoundryAgentService : IDisposable
     private static string BuildFallbackSummary(AlertPayload alert)
     {
         var sb = new StringBuilder();
-        sb.Append($"Attention: An alert has been triggered");
-        
+        sb.Append("Attention: An alert has been triggered");
+
         if (!string.IsNullOrEmpty(alert.SourceId))
             sb.Append($" for {alert.SourceId}");
-        
+
         if (!string.IsNullOrEmpty(alert.SourceName))
             sb.Append($" at {alert.SourceName}");
-        
+
         sb.Append(". ");
-        
+
         if (!string.IsNullOrEmpty(alert.Title))
             sb.Append($"{alert.Title}. ");
-        
+
         if (!string.IsNullOrEmpty(alert.Description))
             sb.Append($"{alert.Description} ");
-        
+
         sb.Append("Immediate attention is recommended. Please stay on the line to ask follow-up questions.");
-        
         return sb.ToString();
     }
 
     public void Dispose()
     {
-        if (!_disposed)
-        {
-            _agentLock.Dispose();
-            _disposed = true;
-        }
+        if (_disposed) return;
+        _agentLock.Dispose();
+        _disposed = true;
     }
 }
-
