@@ -41,17 +41,12 @@ public class FoundrySettings
     public string DataAgentConnectionId { get; set; } = string.Empty;
 
     /// <summary>
-    /// API key for Foundry (optional, uses managed identity if not provided)
-    /// </summary>
-    public string ApiKey { get; set; } = string.Empty;
-
-    /// <summary>
     /// Name for the Foundry Agent
     /// </summary>
     public string AgentName { get; set; } = "FabricVoiceAssistant";
 
     /// <summary>
-    /// System instructions for the Foundry Agent. Use {AlertContext} placeholder for alert-specific context.
+    /// System instructions for the Foundry Agent.
     /// </summary>
     public string AgentInstructions { get; set; } = """
         You are an AI assistant that helps users quickly understand alerts and their impact.
