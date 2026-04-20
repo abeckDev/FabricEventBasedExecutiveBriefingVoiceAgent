@@ -97,6 +97,61 @@ public class FoundryAgentService : IDisposable
                 run = (await client.Runs.GetRunAsync(thread.Id, run.Id)).Value;
             }
 
+            // Always log run steps so tool-call errors (e.g. Fabric Data Agent
+            // auth failures) surface in container logs, even when the run itself
+            // completes successfully and the model paraphrases the error.
+            try
+            {
+                var steps = client.Runs.GetRunSteps(threadId: thread.Id, runId: run.Id);
+                foreach (var step in steps)
+                {
+                    _logger.LogInformation(
+                        "Run step {StepId} type={Type} status={Status} lastError={Error}",
+                        step.Id, step.Type, step.Status, step.LastError?.Message);
+
+                    if (step.StepDetails is RunStepToolCallDetails toolDetails)
+                    {
+                        foreach (var call in toolDetails.ToolCalls)
+                        {
+                            // Dump every public property; for IDictionary props,
+                            // expand the entries so we can see Fabric's raw response
+                            // (which contains the real auth/SQL error).
+                            var sb = new System.Text.StringBuilder();
+                            foreach (var prop in call.GetType().GetProperties(
+                                System.Reflection.BindingFlags.Public |
+                                System.Reflection.BindingFlags.Instance))
+                            {
+                                object? val = null;
+                                try { val = prop.GetValue(call); } catch { /* ignore */ }
+
+                                if (val is System.Collections.IDictionary dict)
+                                {
+                                    sb.Append(prop.Name).Append("={");
+                                    foreach (System.Collections.DictionaryEntry e in dict)
+                                    {
+                                        sb.Append(e.Key).Append(": ")
+                                          .Append(e.Value?.ToString() ?? "null").Append(" | ");
+                                    }
+                                    sb.Append("}; ");
+                                }
+                                else
+                                {
+                                    sb.Append(prop.Name).Append('=')
+                                      .Append(val?.ToString() ?? "null").Append("; ");
+                                }
+                            }
+                            _logger.LogInformation(
+                                "  Tool call {CallId} type={CallType} props={Props}",
+                                call.Id, call.GetType().Name, sb.ToString());
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to enumerate run steps for {RunId}", run.Id);
+            }
+
             if (run.Status != RunStatus.Completed)
             {
                 _logger.LogWarning("Agent run did not complete successfully. Status: {Status}, LastError: {Error}",
