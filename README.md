@@ -121,17 +121,30 @@ curl -X POST https://YOUR_VOICE_APP/api/alert \
 
 ## Local Development & Testing
 
-### Running Both Services Locally
+### VS Code Setup (Recommended)
 
-```bash
-# Terminal 1: Start FabricDataService (port 5100)
-cd src/FabricDataService
-dotnet run --urls "http://localhost:5100"
+The repo includes VS Code tasks and launch configs for a streamlined local debug experience.
 
-# Terminal 2: Start FabricVoiceCallAgent (port 5000)
-cd src/FabricVoiceCallAgent
-dotnet run --urls "http://localhost:5000"
-```
+**1. Configure secrets (one-time):**
+
+Copy and fill in the two Development config files (both are gitignored):
+
+- `src/FabricDataService/appsettings.Development.json` — AI Foundry endpoint + agent name
+- `src/FabricVoiceCallAgent/appsettings.Development.json` — ACS, OpenAI, phone numbers, devtunnel URL
+
+**2. Start everything:**
+
+| Method | How | What it does |
+|--------|-----|--------------|
+| **Task (all-in-one)** | `Cmd+Shift+B` | Starts devtunnel + backend (`:5100`) + voice agent (`:5000`) in parallel terminals |
+| **Debugger (breakpoints)** | Run & Debug → **"Debug: Both Services"** | Launches both services with debugger; start devtunnel separately |
+| **Individual** | Run & Debug → **"Debug: Backend"** or **"Debug: Voice Agent"** | Debug one service at a time |
+
+> **Note:** After starting the devtunnel, copy the tunnel URL into `Acs__CallbackBaseUrl` in `src/FabricVoiceCallAgent/appsettings.Development.json`. The voice agent needs a public URL so ACS can deliver call events and connect the audio WebSocket.
+
+**3. Prerequisites:**
+- [Dev Tunnels CLI](https://learn.microsoft.com/azure/developer/dev-tunnels/) (`devtunnel`) installed
+- .NET 8 SDK
 
 ### Testing the Backend Independently
 
@@ -156,26 +169,17 @@ curl -X POST http://localhost:5100/ask \
   }'
 ```
 
-### Testing the Voice Agent
+### Testing End-to-End
 
-For the voice agent to receive ACS callbacks, you need a publicly accessible URL:
+1. Start the local debug environment (see above)
+2. Verify backend works: `curl http://localhost:5100/health/ready`
+3. Send a test alert:
 
 ```bash
-# Use ngrok or similar
-ngrok http 5000
-
-# Then set the callback URL
-export Acs__CallbackBaseUrl="https://your-ngrok-url.ngrok.io"
-export FabricBackend__BaseUrl="http://localhost:5100"
+curl -X POST http://localhost:5000/api/alert \
+  -H "Content-Type: application/json" \
+  -d '{"sourceId":"TEST-001","sourceName":"Test","alertType":"Threshold","severity":"High","title":"Test Alert","description":"Testing voice agent","metadata":{}}'
 ```
-
-### Testing End-to-End Without Deploying
-
-1. Start FabricDataService locally
-2. Verify data queries work via `POST /ask`
-3. Start FabricVoiceCallAgent with `FabricBackend__BaseUrl=http://localhost:5100`
-4. Use ngrok for ACS callbacks
-5. Send an alert to trigger the full flow
 
 ## Alert Payload Schema
 
