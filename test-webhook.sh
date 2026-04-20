@@ -4,7 +4,7 @@
 # Test Script for Smart Factory Voice Agent
 # ============================================================
 
-WEBHOOK_URL="https://<your-container-app-hostname>/api/alert"
+WEBHOOK_URL="https://<your-container-app-url>/api/alert"
 MANAGER_PHONE="+1234567890"
 
 echo "🏭 Smart Factory Voice Agent - Test Script"
