@@ -405,6 +405,35 @@ CAE_DOMAIN=$(az containerapp env show \
 CALLBACK_BASE_URL="https://${CA_NAME}.${CAE_DOMAIN}"
 
 echo "▶ Creating Container App: ${CA_NAME}"
+
+# Build secrets array conditionally - always include ACS connection string
+SECRETS_ARG="acs-connection-string=keyvaultref:${ACS_SECRET_URI},identityref:${MI_RESOURCE_ID}"
+
+# Build env-vars array - start with required values
+ENV_VARS_ARG=(
+  "Acs__ConnectionString=secretref:acs-connection-string"
+  "Acs__PhoneNumber=${ACS_PHONE_NUMBER}"
+  "Acs__CallbackBaseUrl=${CALLBACK_BASE_URL}"
+  "OpenAi__Endpoint=${OAI_ENDPOINT}"
+  "OpenAi__DeploymentName=${OPENAI_DEPLOYMENT_NAME:-gpt-realtime}"
+  "OpenAi__Voice=${OPENAI_VOICE:-alloy}"
+  "Foundry__ProjectEndpoint=${FOUNDRY_PROJECT_ENDPOINT:-}"
+  "Foundry__AgentId=${FOUNDRY_AGENT_ID:-}"
+  "Foundry__ModelDeploymentName=${FOUNDRY_MODEL_DEPLOYMENT:-gpt-4o}"
+  "Foundry__DataAgentConnectionId=${FOUNDRY_DATA_AGENT_CONNECTION_ID:-}"
+  "VoiceAgent__DefaultPhoneNumber=${DEFAULT_PHONE_NUMBER}"
+  "VoiceAgent__ManagedIdentityClientId=${MI_CLIENT_ID}"
+)
+
+# Only add OpenAI API key secret/env-var if we have an API key stored in Key Vault
+if [[ -n "${OAI_SECRET_URI:-}" ]]; then
+  SECRETS_ARG="${SECRETS_ARG} openai-api-key=keyvaultref:${OAI_SECRET_URI},identityref:${MI_RESOURCE_ID}"
+  ENV_VARS_ARG+=("OpenAi__ApiKey=secretref:openai-api-key")
+  echo "  Using OpenAI API key from Key Vault"
+else
+  echo "  No OpenAI API key configured - app will use managed identity authentication"
+fi
+
 az containerapp create \
   --name "$CA_NAME" \
   --resource-group "$RESOURCE_GROUP" \
@@ -421,23 +450,8 @@ az containerapp create \
   --memory 1Gi \
   --min-replicas 1 \
   --max-replicas 3 \
-  --secrets \
-    "acs-connection-string=keyvaultref:${ACS_SECRET_URI},identityref:${MI_RESOURCE_ID}" \
-    "openai-api-key=keyvaultref:${OAI_SECRET_URI:-placeholder},identityref:${MI_RESOURCE_ID}" \
-  --env-vars \
-    "Acs__ConnectionString=secretref:acs-connection-string" \
-    "Acs__PhoneNumber=${ACS_PHONE_NUMBER}" \
-    "Acs__CallbackBaseUrl=${CALLBACK_BASE_URL}" \
-    "OpenAi__Endpoint=${OAI_ENDPOINT}" \
-    "OpenAi__ApiKey=secretref:openai-api-key" \
-    "OpenAi__DeploymentName=${OPENAI_DEPLOYMENT_NAME:-gpt-realtime}" \
-    "OpenAi__Voice=${OPENAI_VOICE:-alloy}" \
-    "Foundry__ProjectEndpoint=${FOUNDRY_PROJECT_ENDPOINT:-}" \
-    "Foundry__AgentId=${FOUNDRY_AGENT_ID:-}" \
-    "Foundry__ModelDeploymentName=${FOUNDRY_MODEL_DEPLOYMENT:-gpt-4o}" \
-    "Foundry__DataAgentConnectionId=${FOUNDRY_DATA_AGENT_CONNECTION_ID:-}" \
-    "VoiceAgent__DefaultPhoneNumber=${DEFAULT_PHONE_NUMBER}" \
-    "VoiceAgent__ManagedIdentityClientId=${MI_CLIENT_ID}" \
+  --secrets $SECRETS_ARG \
+  --env-vars "${ENV_VARS_ARG[@]}" \
   --output none
 
 # Get the final FQDN (may differ slightly from pre-computed)
