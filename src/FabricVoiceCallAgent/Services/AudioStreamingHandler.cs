@@ -14,21 +14,24 @@ public class AudioStreamingHandler
 {
     private readonly OpenAiSettings _openAiSettings;
     private readonly VoiceAgentSettings _voiceAgentSettings;
+    private readonly FabricBackendSettings _fabricBackendSettings;
     private readonly CallContextStore _callContextStore;
-    private readonly FoundryAgentService _foundryAgentService;
+    private readonly FabricBackendClient _fabricClient;
     private readonly ILogger<AudioStreamingHandler> _logger;
 
     public AudioStreamingHandler(
         IOptions<OpenAiSettings> openAiSettings,
         IOptions<VoiceAgentSettings> voiceAgentSettings,
+        IOptions<FabricBackendSettings> fabricBackendSettings,
         CallContextStore callContextStore,
-        FoundryAgentService foundryAgentService,
+        FabricBackendClient fabricClient,
         ILogger<AudioStreamingHandler> logger)
     {
         _openAiSettings = openAiSettings.Value;
         _voiceAgentSettings = voiceAgentSettings.Value;
+        _fabricBackendSettings = fabricBackendSettings.Value;
         _callContextStore = callContextStore;
-        _foundryAgentService = foundryAgentService;
+        _fabricClient = fabricClient;
         _logger = logger;
     }
 
@@ -369,15 +372,36 @@ public class AudioStreamingHandler
         {
             var args = JsonNode.Parse(argumentsStr);
             var question = args?["question"]?.GetValue<string>() ?? string.Empty;
-            _logger.LogInformation("Forwarding question to data assistant: {Question}", question[..Math.Min(question.Length, 100)]);
+            _logger.LogInformation("Forwarding question to Fabric backend: {Question}", question[..Math.Min(question.Length, 100)]);
 
             var callContext = _callContextStore.Get(callConnectionId);
-            var execSummaryContext = callContext?.ExecSummary ?? string.Empty;
-            queryResult = await _foundryAgentService.AnswerFollowUpAsync(question, execSummaryContext);
+            var followUpTimeout = TimeSpan.FromSeconds(_fabricBackendSettings.FollowUpTimeoutSeconds);
+
+            var result = await _fabricClient.AskAsync(
+                question,
+                alert: callContext?.Alert,
+                priorSummary: callContext?.ExecSummary,
+                timeout: followUpTimeout,
+                cancellationToken: ct);
+
+            queryResult = result.IsSuccess
+                ? result.Answer!
+                : "I'm sorry, I was unable to retrieve that information right now.";
+
+            if (!result.IsSuccess)
+            {
+                _logger.LogWarning("Fabric backend failed for follow-up [correlation={CorrelationId}]: {Error}",
+                    result.CorrelationId, result.ErrorMessage);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Follow-up question cancelled for call {CallConnectionId}", Sanitize(callConnectionId));
+            queryResult = "I'm sorry, the request was cancelled.";
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error calling data assistant from function call");
+            _logger.LogError(ex, "Error calling Fabric backend from function call");
             queryResult = "I'm sorry, I was unable to retrieve that information right now.";
         }
 

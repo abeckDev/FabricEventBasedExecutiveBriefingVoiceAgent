@@ -11,6 +11,17 @@ public class CallContext
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>
+/// In-memory call context store using ConcurrentDictionary.
+/// 
+/// SCALING LIMITATION: This store is local to a single process. Running multiple
+/// replicas will cause WebSocket audio handlers to fail when the ACS callback
+/// lands on a different replica than the one that placed the call.
+/// 
+/// For multi-replica scaling, replace with Azure Cache for Redis:
+///   - Key: callConnectionId, Value: serialized CallContext, TTL: 1 hour
+///   - Register as ICallContextStore interface for easy swap
+/// </summary>
 public class CallContextStore
 {
     private readonly ConcurrentDictionary<string, CallContext> _store = new();

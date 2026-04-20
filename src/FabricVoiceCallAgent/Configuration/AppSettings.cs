@@ -15,78 +15,22 @@ public class OpenAiSettings
     public string Voice { get; set; } = "alloy";
 }
 
-public class FoundrySettings
+public class FabricBackendSettings
 {
     /// <summary>
-    /// Azure AI Foundry project endpoint (account-based project), in the form
-    /// <c>https://&lt;resource&gt;.services.ai.azure.com/api/projects/&lt;project-name&gt;</c>.
+    /// Base URL of the FabricDataService (e.g., http://fabricdataservice:8080)
     /// </summary>
-    public string ProjectEndpoint { get; set; } = string.Empty;
+    public string BaseUrl { get; set; } = string.Empty;
 
     /// <summary>
-    /// Model deployment name for the Foundry Agent (e.g., gpt-4o)
+    /// Default timeout in seconds for backend calls
     /// </summary>
-    public string ModelDeploymentName { get; set; } = "gpt-4o";
+    public int DefaultTimeoutSeconds { get; set; } = 60;
 
     /// <summary>
-    /// ID of a pre-existing Foundry Agent to reuse. When set, the service
-    /// retrieves this agent instead of creating a new one each session.
+    /// Timeout in seconds for follow-up questions during live calls (shorter for better UX)
     /// </summary>
-    public string AgentId { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Connection ID of the Fabric Data Agent in the AI Foundry project.
-    /// Only used when AgentId is empty (i.e. creating a new agent).
-    /// </summary>
-    public string DataAgentConnectionId { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Name for the Foundry Agent
-    /// </summary>
-    public string AgentName { get; set; } = "FabricVoiceAssistant";
-
-    /// <summary>
-    /// System instructions for the Foundry Agent.
-    /// </summary>
-    public string AgentInstructions { get; set; } = """
-        You are an AI assistant that helps users quickly understand alerts and their impact.
-        You have access to live data through a connected Fabric Data Agent.
-        When asked to generate an executive summary or answer questions, query the Data Agent for up-to-date information.
-        Use clear, professional language suitable for executives.
-        Keep spoken summaries to approximately 30 seconds (~75-90 words).
-        """;
-
-    /// <summary>
-    /// Template for building the executive summary request. Supports placeholders:
-    /// - {AlertType}: Type of alert
-    /// - {SourceId}: Source identifier
-    /// - {SourceName}: Source name/location
-    /// - {Severity}: Alert severity
-    /// - {Title}: Alert title
-    /// - {Description}: Alert description
-    /// - {Timestamp}: When the alert occurred
-    /// - {Metadata}: Additional metadata as key=value pairs
-    /// </summary>
-    public string SummaryRequestTemplate { get; set; } = """
-        A webhook alert has been triggered. You MUST use the Data Agent tool to answer — do NOT make up data.
-
-        Follow these steps in order:
-        1. Query the Data Agent for the current overall production status, any ongoing disruptions, anomalies, or problems.
-        2. Then try to find information specifically related to the alert details below (source ID, source name, description).
-        3. Generate a concise ~30-second spoken executive summary:
-           - If you found data matching the alert: summarize the issue, its impact based on real data, and recommended actions.
-           - If no matching data was found for the specific alert: report that a webhook notification was received, but after checking with the production data, no corresponding issue was confirmed. Then briefly summarize the current overall production status you retrieved in step 1.
-
-        Alert details:
-          Type: {AlertType}
-          Source ID: {SourceId}
-          Source Name: {SourceName}
-          Severity: {Severity}
-          Title: {Title}
-          Description: {Description}
-          Timestamp: {Timestamp}
-          Additional Data: {Metadata}
-        """;
+    public int FollowUpTimeoutSeconds { get; set; } = 20;
 }
 
 public class VoiceAgentSettings
@@ -125,4 +69,30 @@ public class VoiceAgentSettings
     /// </summary>
     public string DataAssistantToolDescription { get; set; } = 
         "Ask the data assistant a question about the data. The assistant has access to the live database and will query it to answer the question.";
+
+    /// <summary>
+    /// Template for building the executive summary request sent to the backend.
+    /// Supports placeholders: {AlertType}, {SourceId}, {SourceName}, {Severity},
+    /// {Title}, {Description}, {Timestamp}, {Metadata}
+    /// </summary>
+    public string SummaryRequestTemplate { get; set; } = """
+        A webhook alert has been triggered. Please query live data and generate a concise ~30-second spoken executive summary.
+
+        Follow these steps:
+        1. Check the current overall status, any ongoing disruptions, anomalies, or problems.
+        2. Look for information specifically related to the alert details below.
+        3. Generate the summary:
+           - If matching data is found: summarize the issue, its impact based on real data, and recommended actions.
+           - If no matching data is found: report that a notification was received but no corresponding issue was confirmed, then briefly summarize the current overall status.
+
+        Alert details:
+          Type: {AlertType}
+          Source ID: {SourceId}
+          Source Name: {SourceName}
+          Severity: {Severity}
+          Title: {Title}
+          Description: {Description}
+          Timestamp: {Timestamp}
+          Additional Data: {Metadata}
+        """;
 }
