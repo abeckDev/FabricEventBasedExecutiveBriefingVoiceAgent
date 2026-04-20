@@ -82,14 +82,14 @@ public class FabricBackendClient
 
             _logger.LogInformation(
                 "FabricDataService responded [correlation={CorrelationId}, backend={Backend}, duration={Duration}ms, answer={AnswerLen} chars]",
-                correlationId,
+                askResponse.Metadata?.CorrelationId ?? correlationId,
                 askResponse.Metadata?.BackendUsed ?? "unknown",
                 askResponse.Metadata?.DurationMs ?? 0,
                 askResponse.Answer.Length);
 
             return FabricBackendResult.Success(
                 askResponse.Answer,
-                correlationId,
+                askResponse.Metadata?.CorrelationId ?? correlationId,
                 askResponse.Metadata?.BackendUsed,
                 askResponse.Metadata?.DurationMs ?? 0);
         }

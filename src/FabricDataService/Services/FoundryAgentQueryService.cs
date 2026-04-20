@@ -48,6 +48,9 @@ public class FoundryAgentQueryService : IDataQueryService, IDisposable
         var sw = Stopwatch.StartNew();
         var responsesClient = await GetResponsesClientAsync(cancellationToken);
 
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(_settings.RunTimeoutSeconds));
+
         try
         {
             // Build the full prompt including context and question
@@ -57,7 +60,7 @@ public class FoundryAgentQueryService : IDataQueryService, IDisposable
             var result = await responsesClient.CreateResponseAsync(
                 fullPrompt,
                 previousResponseId: null,
-                cancellationToken: cancellationToken);
+                cancellationToken: timeoutCts.Token);
 
             var response = result.Value;
 
@@ -118,16 +121,24 @@ public class FoundryAgentQueryService : IDataQueryService, IDisposable
                 ToolCallsCount = toolCallsCount
             };
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            sw.Stop();
+            _logger.LogWarning(
+                "Query cancelled by caller after {ElapsedMs}ms. CorrelationId={CorrelationId}",
+                sw.ElapsedMilliseconds, request.CorrelationId);
+            throw; // Propagate caller-initiated cancellation
+        }
         catch (OperationCanceledException)
         {
             sw.Stop();
             _logger.LogWarning(
-                "Query cancelled after {ElapsedMs}ms. CorrelationId={CorrelationId}",
-                sw.ElapsedMilliseconds, request.CorrelationId);
+                "Query timed out after {TimeoutSeconds}s ({ElapsedMs}ms elapsed). CorrelationId={CorrelationId}",
+                _settings.RunTimeoutSeconds, sw.ElapsedMilliseconds, request.CorrelationId);
 
             return new DataQueryResponse
             {
-                Answer = "The query was cancelled or timed out.",
+                Answer = $"The query timed out after {_settings.RunTimeoutSeconds} seconds.",
                 BackendUsed = "foundry-agent",
                 DurationMs = sw.ElapsedMilliseconds,
                 CorrelationId = request.CorrelationId,

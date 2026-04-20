@@ -12,7 +12,7 @@ public static class AskEndpoint
             .WithOpenApi()
             .Produces<AskResponse>(200)
             .Produces(400)
-            .Produces(503);
+            .Produces(500);
 
         app.MapGet("/health/live", () => Results.Ok(new { status = "alive" }))
             .WithName("HealthLive")
@@ -34,7 +34,9 @@ public static class AskEndpoint
             return Results.BadRequest(new { error = "The 'question' field is required." });
         }
 
-        var correlationId = Guid.NewGuid().ToString("N");
+        var correlationId = !string.IsNullOrWhiteSpace(request.IdempotencyKey)
+            ? request.IdempotencyKey.Trim()
+            : Guid.NewGuid().ToString("N");
 
         logger.LogInformation(
             "Received /ask request. Question={QuestionPreview}, CorrelationId={CorrelationId}",
@@ -63,8 +65,20 @@ public static class AskEndpoint
             CorrelationId = correlationId
         };
 
-        var domainResponse = await queryService.QueryAsync(
-            domainRequest, httpContext.RequestAborted);
+        DataQueryResponse domainResponse;
+        try
+        {
+            domainResponse = await queryService.QueryAsync(
+                domainRequest, httpContext.RequestAborted);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex,
+                "Unhandled error in query service. CorrelationId={CorrelationId}", correlationId);
+            return Results.Json(
+                new { error = "An unexpected error occurred while querying the data service.", correlationId },
+                statusCode: 500);
+        }
 
         var response = new AskResponse
         {

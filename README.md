@@ -89,12 +89,12 @@ The script deploys both services to the same Container Apps Environment:
 
 ### 2. Configure for Your Scenario
 
-Set the Foundry agent name in `deploy.env` (or as environment variables):
+Set the Foundry agent ID in `deploy.env` (or as environment variables):
 
 ```bash
 # The agent must already exist in AI Foundry portal
 FOUNDRY_PROJECT_ENDPOINT="https://<resource>.services.ai.azure.com/api/projects/<project>"
-FOUNDRY_AGENT_NAME="MyFabricAssistant"
+FOUNDRY_AGENT_ID="<agent-id-from-foundry-portal>"
 ```
 
 ### 3. Send an Alert
@@ -202,10 +202,11 @@ curl -X POST http://localhost:5000/api/alert \
 | Setting | Environment Variable | Description |
 |---------|---------------------|-------------|
 | Project Endpoint | `FabricDataService__ProjectEndpoint` | AI Foundry project endpoint |
-| Agent Name | `FabricDataService__AgentId` | Agent name in AI Foundry portal |
+| Agent ID | `FabricDataService__AgentId` | Agent ID in AI Foundry (not name; used by `GetAgentAsync`) |
 | Managed Identity | `FabricDataService__ManagedIdentityClientId` | Client ID for Azure auth |
-| Timeout | `FabricDataService__QueryTimeoutSeconds` | Agent query timeout (default: 120) |
-| Debug Mode | `FabricDataService__IncludeDebugInfo` | Include tool call details in response |
+| Run Timeout | `FabricDataService__RunTimeoutSeconds` | Timeout for agent run completion in seconds (default: 30) |
+| Run Polling Interval | `FabricDataService__RunPollingIntervalMs` | Polling interval for checking agent run status in milliseconds (default: 500) |
+| Debug Tool Logging | `FabricDataService__EnableDebugToolLogging` | Enable verbose debug logging for tool calls (default: false) |
 
 ### FabricVoiceCallAgent
 
@@ -238,7 +239,7 @@ curl -X POST http://localhost:5000/api/alert \
 1. In Azure AI Foundry portal, create a new **Agent**
 2. Add a **Microsoft Fabric** tool connection pointing to your Data Agent
 3. Configure the agent's instructions for your domain
-4. Note the **agent name** — this is what you'll set as `FOUNDRY_AGENT_NAME`
+4. Note the **agent ID** — this is what you'll set as `FOUNDRY_AGENT_ID`
 
 ### 3. Grant Fabric Permissions to Backend Managed Identity
 

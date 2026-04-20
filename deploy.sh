@@ -120,7 +120,7 @@ if [[ -z "${FOUNDRY_PROJECT_ENDPOINT:-}" ]] && [[ "$INTERACTIVE" == true ]]; the
   read -rp "  Configure AI Foundry / Fabric Data Agent for backend service? (y/N): " config_foundry
   if [[ "$config_foundry" =~ ^[Yy] ]]; then
     prompt_var FOUNDRY_PROJECT_ENDPOINT          "Foundry project endpoint (https://<resource>.services.ai.azure.com/api/projects/<project>)"
-    prompt_var FOUNDRY_AGENT_NAME                "Foundry Agent name (as configured in portal)"
+    prompt_var FOUNDRY_AGENT_ID                  "Foundry Agent ID (not name; as shown in the AI Foundry portal agent details)"
 
     read -rp "  Foundry resource ID for RBAC (leave blank to skip): " foundry_rid
     if [[ -n "$foundry_rid" ]]; then
@@ -418,7 +418,7 @@ echo "▶ Creating Container App (Backend): ${CA_BACKEND_NAME}"
 
 BACKEND_ENV_VARS=(
   "FabricDataService__ProjectEndpoint=${FOUNDRY_PROJECT_ENDPOINT:-}"
-  "FabricDataService__AgentId=${FOUNDRY_AGENT_NAME:-}"
+  "FabricDataService__AgentId=${FOUNDRY_AGENT_ID:-}"
   "FabricDataService__ManagedIdentityClientId=${MI_BACKEND_CLIENT_ID}"
 )
 
