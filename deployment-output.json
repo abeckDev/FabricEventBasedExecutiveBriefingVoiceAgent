@@ -1,0 +1,34 @@
+{
+  "acsResourceReused": {
+    "type": "Bool",
+    "value": true
+  },
+  "alertWebhookUrl": {
+    "type": "String",
+    "value": "https://ca-wqn32wzfzp5we.redflower-6dec3801.swedencentral.azurecontainerapps.io/api/alert"
+  },
+  "callbackUrl": {
+    "type": "String",
+    "value": "https://ca-wqn32wzfzp5we.redflower-6dec3801.swedencentral.azurecontainerapps.io/api/callbacks"
+  },
+  "containerAppUrl": {
+    "type": "String",
+    "value": "https://ca-wqn32wzfzp5we.redflower-6dec3801.swedencentral.azurecontainerapps.io"
+  },
+  "keyVaultName": {
+    "type": "String",
+    "value": "kv-wqn32wzfzp5we"
+  },
+  "managedIdentityClientId": {
+    "type": "String",
+    "value": "627265ef-57c3-414e-ab03-cdc2ca32980c"
+  },
+  "openAiEndpoint": {
+    "type": "String",
+    "value": "https://aifoundry-sandbox-resource.openai.azure.com/openai/v1"
+  },
+  "webSocketUrl": {
+    "type": "String",
+    "value": "wss://ca-wqn32wzfzp5we.redflower-6dec3801.swedencentral.azurecontainerapps.io/ws/audio"
+  }
+}

@@ -1,9 +1,9 @@
 using Azure.Communication.CallAutomation;
 using Azure.Messaging;
 using Microsoft.AspNetCore.Mvc;
-using SmartFactoryCallAgent.Models;
+using FabricVoiceCallAgent.Models;
 
-namespace SmartFactoryCallAgent.Controllers;
+namespace FabricVoiceCallAgent.Controllers;
 
 [ApiController]
 [Route("api/callbacks")]
@@ -11,9 +11,6 @@ public class CallbackController : ControllerBase
 {
     private readonly CallContextStore _callContextStore;
     private readonly ILogger<CallbackController> _logger;
-
-    private const string VoiceName = "en-US-AriaNeural";
-    private const string FollowUpPrompt = "You may now ask me any follow-up questions about the machine anomaly or production impact.";
 
     public CallbackController(
         CallContextStore callContextStore,
@@ -87,7 +84,7 @@ public class CallbackController : ControllerBase
 
         try
         {
-            // Skip ACS TTS - start media streaming immediately so OpenAI Realtime API
+            // Start media streaming immediately so OpenAI Realtime API
             // speaks the exec summary and handles follow-up Q&A via WebSocket audio
             var client = GetCallConnectionClient(callConnected.CallConnectionId);
             var callMedia = client.GetCallMedia();
@@ -109,6 +106,7 @@ public class CallbackController : ControllerBase
     private async Task HandlePlayCompletedAsync(PlayCompleted playCompleted)
     {
         _logger.LogInformation("Play completed for call: {CallConnectionId}", playCompleted.CallConnectionId);
+        await Task.CompletedTask;
     }
 
     private void HandlePlayFailed(PlayFailed playFailed)
