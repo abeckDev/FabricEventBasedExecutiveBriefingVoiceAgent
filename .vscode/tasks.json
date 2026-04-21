@@ -14,28 +14,96 @@
             "problemMatcher": "$msCompile"
         },
         {
-            "label": "publish",
-            "command": "dotnet",
-            "type": "process",
-            "args": [
-                "publish",
-                "${workspaceFolder}/FabricEventBasedExecutiveBriefingVoiceAgent.sln",
-                "/property:GenerateFullPaths=true",
-                "/consoleloggerparameters:NoSummary;ForceNoAlign"
-            ],
-            "problemMatcher": "$msCompile"
+            "label": "devtunnel",
+            "type": "shell",
+            "command": "devtunnel host -p 5000 --allow-anonymous",
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": { "regexp": "^$" },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^Hosting port",
+                    "endsPattern": "Connect via browser"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "group": "local-debug"
+            }
         },
         {
-            "label": "watch",
-            "command": "dotnet",
+            "label": "start-backend",
             "type": "process",
+            "command": "dotnet",
             "args": [
-                "watch",
                 "run",
                 "--project",
-                "${workspaceFolder}/FabricEventBasedExecutiveBriefingVoiceAgent.sln"
+                "${workspaceFolder}/src/FabricDataService/FabricDataService.csproj",
+                "--urls",
+                "http://localhost:5100"
             ],
-            "problemMatcher": "$msCompile"
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": { "regexp": "^$" },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^Building\\.\\.\\.",
+                    "endsPattern": "Now listening on"
+                }
+            },
+            "options": {
+                "env": {
+                    "ASPNETCORE_ENVIRONMENT": "Development"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "group": "local-debug"
+            }
+        },
+        {
+            "label": "start-voice-agent",
+            "type": "process",
+            "command": "dotnet",
+            "args": [
+                "run",
+                "--project",
+                "${workspaceFolder}/src/FabricVoiceCallAgent/FabricVoiceCallAgent.csproj",
+                "--urls",
+                "http://localhost:5000"
+            ],
+            "isBackground": true,
+            "dependsOn": ["start-backend"],
+            "problemMatcher": {
+                "pattern": { "regexp": "^$" },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^Building\\.\\.\\.",
+                    "endsPattern": "Now listening on"
+                }
+            },
+            "options": {
+                "env": {
+                    "ASPNETCORE_ENVIRONMENT": "Development"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "group": "local-debug"
+            }
+        },
+        {
+            "label": "Local Debug Environment",
+            "dependsOn": ["devtunnel", "start-backend", "start-voice-agent"],
+            "dependsOrder": "parallel",
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
         }
     ]
 }

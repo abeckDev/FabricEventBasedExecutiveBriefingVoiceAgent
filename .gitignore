@@ -416,3 +416,8 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+debug-session.md
+
+# Local development settings (contain secrets)
+appsettings.Development.json
+**/appsettings.Development.json

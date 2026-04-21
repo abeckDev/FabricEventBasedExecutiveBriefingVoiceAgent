@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using FabricVoiceCallAgent.Configuration;
 using FabricVoiceCallAgent.Models;
 using FabricVoiceCallAgent.Services;
@@ -7,12 +8,16 @@ var builder = WebApplication.CreateBuilder(args);
 // Bind configuration
 builder.Services.Configure<AcsSettings>(builder.Configuration.GetSection("Acs"));
 builder.Services.Configure<OpenAiSettings>(builder.Configuration.GetSection("OpenAi"));
-builder.Services.Configure<FoundrySettings>(builder.Configuration.GetSection("Foundry"));
+builder.Services.Configure<FabricBackendSettings>(builder.Configuration.GetSection("FabricBackend"));
 builder.Services.Configure<VoiceAgentSettings>(builder.Configuration.GetSection("VoiceAgent"));
 
 // Register services
 builder.Services.AddSingleton<CallContextStore>();
-builder.Services.AddScoped<FoundryAgentService>();
+builder.Services.AddHttpClient<FabricBackendClient>((sp, client) =>
+{
+    var settings = sp.GetRequiredService<IOptions<FabricBackendSettings>>().Value;
+    client.BaseAddress = new Uri(settings.BaseUrl);
+});
 builder.Services.AddScoped<CallService>();
 builder.Services.AddScoped<AudioStreamingHandler>();
 

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using FabricVoiceCallAgent.Configuration;
 using FabricVoiceCallAgent.Models;
 using FabricVoiceCallAgent.Services;
+using System.Text;
 
 namespace FabricVoiceCallAgent.Controllers;
 
@@ -10,25 +11,25 @@ namespace FabricVoiceCallAgent.Controllers;
 [Route("api/alert")]
 public class AlertController : ControllerBase
 {
-    private readonly FoundryAgentService _foundryAgentService;
+    private readonly FabricBackendClient _fabricClient;
     private readonly CallService _callService;
     private readonly VoiceAgentSettings _voiceAgentSettings;
     private readonly ILogger<AlertController> _logger;
 
     public AlertController(
-        FoundryAgentService foundryAgentService,
+        FabricBackendClient fabricClient,
         CallService callService,
         IOptions<VoiceAgentSettings> voiceAgentSettings,
         ILogger<AlertController> logger)
     {
-        _foundryAgentService = foundryAgentService;
+        _fabricClient = fabricClient;
         _callService = callService;
         _voiceAgentSettings = voiceAgentSettings.Value;
         _logger = logger;
     }
 
     /// <summary>
-    /// Receives an alert payload, generates an executive summary using the Foundry Agent,
+    /// Receives an alert payload, generates an executive summary via the Fabric backend,
     /// and places an outbound voice call to deliver the summary.
     /// </summary>
     [HttpPost]
@@ -40,9 +41,24 @@ public class AlertController : ControllerBase
 
         try
         {
-            // 1. Generate executive summary via Foundry Agent (queries Data Agent internally)
-            var execSummary = await _foundryAgentService.GenerateExecSummaryAsync(alert);
-            _logger.LogInformation("Generated exec summary ({Length} chars)", execSummary.Length);
+            // 1. Generate executive summary via Fabric backend
+            var question = BuildSummaryRequest(alert);
+            var result = await _fabricClient.AskAsync(
+                question, alert, cancellationToken: HttpContext.RequestAborted);
+
+            var execSummary = result.IsSuccess
+                ? result.Answer!
+                : BuildFallbackSummary(alert);
+
+            if (!result.IsSuccess)
+            {
+                _logger.LogWarning(
+                    "Fabric backend failed [correlation={CorrelationId}]: {Error}. Using fallback summary.",
+                    result.CorrelationId, result.ErrorMessage);
+            }
+
+            _logger.LogInformation("Executive summary ready ({Length} chars, backend={Backend})",
+                execSummary.Length, result.BackendUsed ?? "fallback");
 
             // 2. Determine phone number (alert override > default config)
             var phoneNumber = !string.IsNullOrEmpty(alert.PhoneNumber) 
@@ -70,7 +86,8 @@ public class AlertController : ControllerBase
                 callConnectionId,
                 execSummary,
                 sourceId = alert.SourceId,
-                sourceName = alert.SourceName
+                sourceName = alert.SourceName,
+                correlationId = result.CorrelationId
             });
         }
         catch (Exception ex)
@@ -78,6 +95,42 @@ public class AlertController : ControllerBase
             _logger.LogError(ex, "Error processing alert for source {SourceId}", Sanitize(alert.SourceId));
             return StatusCode(500, new { status = "error", message = ex.Message });
         }
+    }
+
+    private string BuildSummaryRequest(AlertPayload alert)
+    {
+        return _voiceAgentSettings.SummaryRequestTemplate
+            .Replace("{AlertType}", alert.AlertType ?? "N/A")
+            .Replace("{SourceId}", alert.SourceId ?? "N/A")
+            .Replace("{SourceName}", alert.SourceName ?? "N/A")
+            .Replace("{Severity}", alert.Severity ?? "N/A")
+            .Replace("{Title}", alert.Title ?? "N/A")
+            .Replace("{Description}", alert.Description ?? "N/A")
+            .Replace("{Timestamp}", alert.Timestamp?.ToString("u") ?? "N/A")
+            .Replace("{Metadata}", alert.GetMetadataSummary());
+    }
+
+    private static string BuildFallbackSummary(AlertPayload alert)
+    {
+        var sb = new StringBuilder();
+        sb.Append("Attention: An alert has been triggered");
+
+        if (!string.IsNullOrEmpty(alert.SourceId))
+            sb.Append($" for {alert.SourceId}");
+
+        if (!string.IsNullOrEmpty(alert.SourceName))
+            sb.Append($" at {alert.SourceName}");
+
+        sb.Append(". ");
+
+        if (!string.IsNullOrEmpty(alert.Title))
+            sb.Append($"{alert.Title}. ");
+
+        if (!string.IsNullOrEmpty(alert.Description))
+            sb.Append($"{alert.Description} ");
+
+        sb.Append("Immediate attention is recommended. Please stay on the line to ask follow-up questions.");
+        return sb.ToString();
     }
 
     private static string Sanitize(string? value)

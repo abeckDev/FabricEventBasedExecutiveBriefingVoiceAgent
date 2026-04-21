@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 ###############################################################################
-# deploy.sh – CLI-based deployment for Fabric Voice Call Agent (demo/sandbox)
+# deploy.sh – CLI-based deployment for Fabric Data Service + Voice Call Agent
 #
-# Deploys all required Azure resources, builds the container image, and
-# configures the Container App with the correct environment variables.
+# Deploys all required Azure resources, builds two container images, and
+# configures two Container Apps:
+#   1. FabricDataService  – internal ingress, queries Fabric via AI Foundry
+#   2. FabricVoiceCallAgent – external ingress, ACS calling + OpenAI Realtime
 #
 # Usage:
 #   ./deploy.sh              # interactive – prompts for missing values
@@ -113,25 +115,12 @@ if [[ -z "${EXISTING_OPENAI_ENDPOINT:-}" ]] && [[ "$INTERACTIVE" == true ]]; the
   fi
 fi
 
-# Optional: Foundry / Data Agent
+# Optional: Fabric Data Service backend (AI Foundry + Data Agent)
 if [[ -z "${FOUNDRY_PROJECT_ENDPOINT:-}" ]] && [[ "$INTERACTIVE" == true ]]; then
-  read -rp "  Configure AI Foundry / Fabric Data Agent now? (y/N): " config_foundry
+  read -rp "  Configure AI Foundry / Fabric Data Agent for backend service? (y/N): " config_foundry
   if [[ "$config_foundry" =~ ^[Yy] ]]; then
     prompt_var FOUNDRY_PROJECT_ENDPOINT          "Foundry project endpoint (https://<resource>.services.ai.azure.com/api/projects/<project>)"
-
-    # Agent reuse vs creation
-    if [[ -z "${FOUNDRY_AGENT_ID:-}" ]]; then
-      read -rp "  Reuse a pre-existing Foundry Agent? (y/N): " reuse_agent
-      if [[ "$reuse_agent" =~ ^[Yy] ]]; then
-        prompt_var FOUNDRY_AGENT_ID "Foundry Agent ID (asst_... format)"
-      fi
-    fi
-
-    # Only ask for Data Agent connection & model if not reusing an existing agent
-    if [[ -z "${FOUNDRY_AGENT_ID:-}" ]]; then
-      prompt_var FOUNDRY_DATA_AGENT_CONNECTION_ID  "Fabric Data Agent connection ID"
-      prompt_var FOUNDRY_MODEL_DEPLOYMENT          "Foundry model deployment name" "gpt-4o"
-    fi
+    prompt_var FOUNDRY_AGENT_ID                  "Foundry Agent ID (not name; as shown in the AI Foundry portal agent details)"
 
     read -rp "  Foundry resource ID for RBAC (leave blank to skip): " foundry_rid
     if [[ -n "$foundry_rid" ]]; then
@@ -153,15 +142,17 @@ prompt_var OPENAI_VOICE           "OpenAI voice (alloy/echo/fable/onyx/nova/shim
 HASH=$(echo -n "${ENVIRONMENT_NAME}-${RESOURCE_GROUP}" | sha256sum | head -c 10)
 KV_NAME="kv-${HASH}"
 MI_NAME="id-${HASH}"
+MI_BACKEND_NAME="id-backend-${HASH}"
 ACR_NAME="acr${HASH}"
 LOG_NAME="log-${HASH}"
 CAE_NAME="cae-${HASH}"
-CA_NAME="ca-${HASH}"
+CA_VOICE_NAME="ca-voice-${HASH}"
+CA_BACKEND_NAME="ca-backend-${HASH}"
 ACS_NAME="acs-${HASH}"
 OAI_NAME="oai-${HASH}"
 
 echo "============================================================"
-echo "Fabric Voice Call Agent – Deployment"
+echo "Fabric Data Service + Voice Call Agent – Deployment"
 echo "============================================================"
 echo "Environment:    ${ENVIRONMENT_NAME}"
 echo "Resource Group: ${RESOURCE_GROUP}"
@@ -176,8 +167,8 @@ az group create \
   --location "$LOCATION" \
   --output none
 
-# ─── 2. User-Assigned Managed Identity ──────────────────────────────────────
-echo "▶ Creating Managed Identity: ${MI_NAME}"
+# ─── 2. User-Assigned Managed Identities ────────────────────────────────────
+echo "▶ Creating Managed Identity (Voice Agent): ${MI_NAME}"
 az identity create \
   --name "$MI_NAME" \
   --resource-group "$RESOURCE_GROUP" \
@@ -187,8 +178,19 @@ az identity create \
 MI_CLIENT_ID=$(az identity show --name "$MI_NAME" --resource-group "$RESOURCE_GROUP" --query clientId -o tsv)
 MI_PRINCIPAL_ID=$(az identity show --name "$MI_NAME" --resource-group "$RESOURCE_GROUP" --query principalId -o tsv)
 MI_RESOURCE_ID=$(az identity show --name "$MI_NAME" --resource-group "$RESOURCE_GROUP" --query id -o tsv)
-echo "  Client ID:    ${MI_CLIENT_ID}"
-echo "  Principal ID: ${MI_PRINCIPAL_ID}"
+echo "  Voice MI Client ID:    ${MI_CLIENT_ID}"
+
+echo "▶ Creating Managed Identity (Backend): ${MI_BACKEND_NAME}"
+az identity create \
+  --name "$MI_BACKEND_NAME" \
+  --resource-group "$RESOURCE_GROUP" \
+  --location "$LOCATION" \
+  --output none
+
+MI_BACKEND_CLIENT_ID=$(az identity show --name "$MI_BACKEND_NAME" --resource-group "$RESOURCE_GROUP" --query clientId -o tsv)
+MI_BACKEND_PRINCIPAL_ID=$(az identity show --name "$MI_BACKEND_NAME" --resource-group "$RESOURCE_GROUP" --query principalId -o tsv)
+MI_BACKEND_RESOURCE_ID=$(az identity show --name "$MI_BACKEND_NAME" --resource-group "$RESOURCE_GROUP" --query id -o tsv)
+echo "  Backend MI Client ID:  ${MI_BACKEND_CLIENT_ID}"
 
 # ─── 3. Key Vault ───────────────────────────────────────────────────────────
 echo "▶ Creating Key Vault: ${KV_NAME}"
@@ -358,9 +360,19 @@ ACR_LOGIN_SERVER=$(az acr show --name "$ACR_NAME" --resource-group "$RESOURCE_GR
 ACR_USERNAME="$ACR_NAME"
 ACR_PASSWORD=$(az acr credential show --name "$ACR_NAME" --query "passwords[0].value" -o tsv)
 
-# ─── 7. Build & Push Container Image ────────────────────────────────────────
-IMAGE="${ACR_LOGIN_SERVER}/fabricvoicecallagent:latest"
-echo "▶ Building container image: ${IMAGE}"
+# ─── 7. Build & Push Container Images ───────────────────────────────────────
+IMAGE_VOICE="${ACR_LOGIN_SERVER}/fabricvoicecallagent:latest"
+IMAGE_BACKEND="${ACR_LOGIN_SERVER}/fabricdataservice:latest"
+
+echo "▶ Building container image: ${IMAGE_BACKEND}"
+az acr build \
+  --registry "$ACR_NAME" \
+  --image "fabricdataservice:latest" \
+  --file "${SCRIPT_DIR}/src/FabricDataService/Dockerfile" \
+  "${SCRIPT_DIR}/src/FabricDataService/" \
+  --output none
+
+echo "▶ Building container image: ${IMAGE_VOICE}"
 az acr build \
   --registry "$ACR_NAME" \
   --image "fabricvoicecallagent:latest" \
@@ -401,26 +413,60 @@ CAE_DOMAIN=$(az containerapp env show \
   --resource-group "$RESOURCE_GROUP" \
   --query properties.defaultDomain -o tsv)
 
-# ─── 9. Container App ───────────────────────────────────────────────────────
-CALLBACK_BASE_URL="https://${CA_NAME}.${CAE_DOMAIN}"
+# ─── 9. FabricDataService Container App (internal ingress) ──────────────────
+echo "▶ Creating Container App (Backend): ${CA_BACKEND_NAME}"
 
-echo "▶ Creating Container App: ${CA_NAME}"
+BACKEND_ENV_VARS=(
+  "FabricDataService__ProjectEndpoint=${FOUNDRY_PROJECT_ENDPOINT:-}"
+  "FabricDataService__AgentId=${FOUNDRY_AGENT_ID:-}"
+  "FabricDataService__ManagedIdentityClientId=${MI_BACKEND_CLIENT_ID}"
+)
+
+az containerapp create \
+  --name "$CA_BACKEND_NAME" \
+  --resource-group "$RESOURCE_GROUP" \
+  --environment "$CAE_NAME" \
+  --image "$IMAGE_BACKEND" \
+  --registry-server "$ACR_LOGIN_SERVER" \
+  --registry-username "$ACR_USERNAME" \
+  --registry-password "$ACR_PASSWORD" \
+  --user-assigned "$MI_BACKEND_RESOURCE_ID" \
+  --target-port 8080 \
+  --ingress internal \
+  --transport auto \
+  --cpu 0.5 \
+  --memory 1Gi \
+  --min-replicas 1 \
+  --max-replicas 3 \
+  --env-vars "${BACKEND_ENV_VARS[@]}" \
+  --output none
+
+BACKEND_FQDN=$(az containerapp show \
+  --name "$CA_BACKEND_NAME" \
+  --resource-group "$RESOURCE_GROUP" \
+  --query properties.configuration.ingress.fqdn -o tsv)
+BACKEND_URL="https://${BACKEND_FQDN}"
+echo "  Backend URL (internal): ${BACKEND_URL}"
+
+# ─── 10. FabricVoiceCallAgent Container App (external ingress) ──────────────
+CALLBACK_BASE_URL="https://${CA_VOICE_NAME}.${CAE_DOMAIN}"
+
+echo "▶ Creating Container App (Voice Agent): ${CA_VOICE_NAME}"
 
 # Build secrets array conditionally - always include ACS connection string
 SECRETS_ARG="acs-connection-string=keyvaultref:${ACS_SECRET_URI},identityref:${MI_RESOURCE_ID}"
 
-# Build env-vars array - start with required values
-ENV_VARS_ARG=(
+# Build env-vars array
+VOICE_ENV_VARS=(
   "Acs__ConnectionString=secretref:acs-connection-string"
   "Acs__PhoneNumber=${ACS_PHONE_NUMBER}"
   "Acs__CallbackBaseUrl=${CALLBACK_BASE_URL}"
   "OpenAi__Endpoint=${OAI_ENDPOINT}"
   "OpenAi__DeploymentName=${OPENAI_DEPLOYMENT_NAME:-gpt-realtime}"
   "OpenAi__Voice=${OPENAI_VOICE:-alloy}"
-  "Foundry__ProjectEndpoint=${FOUNDRY_PROJECT_ENDPOINT:-}"
-  "Foundry__AgentId=${FOUNDRY_AGENT_ID:-}"
-  "Foundry__ModelDeploymentName=${FOUNDRY_MODEL_DEPLOYMENT:-gpt-4o}"
-  "Foundry__DataAgentConnectionId=${FOUNDRY_DATA_AGENT_CONNECTION_ID:-}"
+  "FabricBackend__BaseUrl=${BACKEND_URL}"
+  "FabricBackend__DefaultTimeoutSeconds=60"
+  "FabricBackend__FollowUpTimeoutSeconds=20"
   "VoiceAgent__DefaultPhoneNumber=${DEFAULT_PHONE_NUMBER}"
   "VoiceAgent__ManagedIdentityClientId=${MI_CLIENT_ID}"
 )
@@ -428,17 +474,17 @@ ENV_VARS_ARG=(
 # Only add OpenAI API key secret/env-var if we have an API key stored in Key Vault
 if [[ -n "${OAI_SECRET_URI:-}" ]]; then
   SECRETS_ARG="${SECRETS_ARG} openai-api-key=keyvaultref:${OAI_SECRET_URI},identityref:${MI_RESOURCE_ID}"
-  ENV_VARS_ARG+=("OpenAi__ApiKey=secretref:openai-api-key")
+  VOICE_ENV_VARS+=("OpenAi__ApiKey=secretref:openai-api-key")
   echo "  Using OpenAI API key from Key Vault"
 else
   echo "  No OpenAI API key configured - app will use managed identity authentication"
 fi
 
 az containerapp create \
-  --name "$CA_NAME" \
+  --name "$CA_VOICE_NAME" \
   --resource-group "$RESOURCE_GROUP" \
   --environment "$CAE_NAME" \
-  --image "$IMAGE" \
+  --image "$IMAGE_VOICE" \
   --registry-server "$ACR_LOGIN_SERVER" \
   --registry-username "$ACR_USERNAME" \
   --registry-password "$ACR_PASSWORD" \
@@ -449,30 +495,28 @@ az containerapp create \
   --cpu 0.5 \
   --memory 1Gi \
   --min-replicas 1 \
-  --max-replicas 3 \
+  --max-replicas 1 \
   --secrets $SECRETS_ARG \
-  --env-vars "${ENV_VARS_ARG[@]}" \
+  --env-vars "${VOICE_ENV_VARS[@]}" \
   --output none
 
 # Get the final FQDN (may differ slightly from pre-computed)
 CA_FQDN=$(az containerapp show \
-  --name "$CA_NAME" \
+  --name "$CA_VOICE_NAME" \
   --resource-group "$RESOURCE_GROUP" \
   --query properties.configuration.ingress.fqdn -o tsv)
 
-# ─── 10. Grant Foundry RBAC (if using existing AI Foundry) ──────────────────
+# ─── 11. Grant Foundry RBAC to Backend MI ───────────────────────────────────
 if [[ -n "${EXISTING_FOUNDRY_RESOURCE_ID:-}" ]]; then
-  echo "▶ Granting managed identity access to AI Foundry project..."
-  # Azure AI User is required for agent data-plane operations (agents/write, threads, runs)
+  echo "▶ Granting backend managed identity access to AI Foundry project..."
   az role assignment create \
-    --assignee-object-id "$MI_PRINCIPAL_ID" \
+    --assignee-object-id "$MI_BACKEND_PRINCIPAL_ID" \
     --assignee-principal-type ServicePrincipal \
     --role "Azure AI User" \
     --scope "$EXISTING_FOUNDRY_RESOURCE_ID" \
     --output none 2>/dev/null || true
-  # Azure AI Developer for broader project management operations (kept for compatibility)
   az role assignment create \
-    --assignee-object-id "$MI_PRINCIPAL_ID" \
+    --assignee-object-id "$MI_BACKEND_PRINCIPAL_ID" \
     --assignee-principal-type ServicePrincipal \
     --role "Azure AI Developer" \
     --scope "$EXISTING_FOUNDRY_RESOURCE_ID" \
@@ -485,13 +529,17 @@ echo "============================================================"
 echo "  Deployment Complete!"
 echo "============================================================"
 echo ""
-echo "Container App URL:  https://${CA_FQDN}"
-echo "Alert Webhook:      https://${CA_FQDN}/api/alert"
-echo "Callback URL:       https://${CA_FQDN}/api/callbacks"
-echo "WebSocket URL:      wss://${CA_FQDN}/ws/audio"
+echo "Voice Agent URL:       https://${CA_FQDN}"
+echo "Alert Webhook:         https://${CA_FQDN}/api/alert"
+echo "Callback URL:          https://${CA_FQDN}/api/callbacks"
+echo "WebSocket URL:         wss://${CA_FQDN}/ws/audio"
 echo ""
-echo "Managed Identity:   ${MI_CLIENT_ID}"
-echo "Key Vault:          ${KV_NAME}"
+echo "Backend URL (internal): ${BACKEND_URL}"
+echo "Backend Health:         ${BACKEND_URL}/health/live"
+echo ""
+echo "Voice MI:              ${MI_CLIENT_ID}"
+echo "Backend MI:            ${MI_BACKEND_CLIENT_ID}"
+echo "Key Vault:             ${KV_NAME}"
 echo ""
 echo "── Test with: ──"
 echo "curl -X POST https://${CA_FQDN}/api/alert \\"
