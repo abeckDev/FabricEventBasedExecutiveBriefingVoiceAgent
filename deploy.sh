@@ -10,6 +10,8 @@
 # Usage:
 #   ./deploy.sh              # interactive – prompts for missing values
 #   ./deploy.sh --no-prompt  # non-interactive – fails on missing values
+#   ./deploy.sh --skip-build # skip Docker image builds, reuse existing images
+#   Flags can be combined: ./deploy.sh --no-prompt --skip-build
 #
 # Configuration is stored in deploy.env (auto-created on first run).
 # The script is idempotent – re-running it will update existing resources.
@@ -18,7 +20,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INTERACTIVE=true
-[[ "${1:-}" == "--no-prompt" ]] && INTERACTIVE=false
+SKIP_BUILD=false
+for arg in "$@"; do
+  case "$arg" in
+    --no-prompt)  INTERACTIVE=false ;;
+    --skip-build) SKIP_BUILD=true ;;
+  esac
+done
 
 # ─── Helper: prompt for a value and persist it to deploy.env ─────────────────
 # Usage: prompt_var VAR_NAME "Prompt text" ["default_value"]
@@ -193,14 +201,26 @@ MI_BACKEND_RESOURCE_ID=$(az identity show --name "$MI_BACKEND_NAME" --resource-g
 echo "  Backend MI Client ID:  ${MI_BACKEND_CLIENT_ID}"
 
 # ─── 3. Key Vault ───────────────────────────────────────────────────────────
-echo "▶ Creating Key Vault: ${KV_NAME}"
-az keyvault create \
-  --name "$KV_NAME" \
-  --resource-group "$RESOURCE_GROUP" \
-  --location "$LOCATION" \
-  --enable-rbac-authorization true \
-  --retention-days 7 \
-  --output none
+KV_EXISTED=false
+if az keyvault show --name "$KV_NAME" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+  echo "▶ Key Vault already exists: ${KV_NAME} (skipping creation)"
+  KV_EXISTED=true
+else
+  # Check for soft-deleted vault with the same name and recover it
+  if az keyvault show-deleted --name "$KV_NAME" &>/dev/null; then
+    echo "▶ Recovering soft-deleted Key Vault: ${KV_NAME}"
+    az keyvault recover --name "$KV_NAME" --output none
+  else
+    echo "▶ Creating Key Vault: ${KV_NAME}"
+    az keyvault create \
+      --name "$KV_NAME" \
+      --resource-group "$RESOURCE_GROUP" \
+      --location "$LOCATION" \
+      --enable-rbac-authorization true \
+      --retention-days 7 \
+      --output none
+  fi
+fi
 
 KV_ID=$(az keyvault show --name "$KV_NAME" --resource-group "$RESOURCE_GROUP" --query id -o tsv)
 
@@ -222,22 +242,30 @@ az role assignment create \
   --scope "$KV_ID" \
   --output none 2>/dev/null || true
 
-# Wait for RBAC propagation
-echo "  Waiting for RBAC propagation (30s)..."
-sleep 30
+# Wait for RBAC propagation (only needed for new vaults)
+if [[ "$KV_EXISTED" == false ]]; then
+  echo "  Waiting for RBAC propagation (30s)..."
+  sleep 30
+else
+  echo "  Skipping RBAC wait (vault already existed)"
+fi
 
 # ─── 4. Azure Communication Services ────────────────────────────────────────
 if [[ -n "${EXISTING_ACS_CONNECTION_STRING:-}" ]]; then
   echo "▶ Reusing existing ACS (connection string provided)"
   ACS_CONN_STRING="$EXISTING_ACS_CONNECTION_STRING"
 else
-  echo "▶ Creating Azure Communication Services: ${ACS_NAME}"
-  az communication create \
-    --name "$ACS_NAME" \
-    --resource-group "$RESOURCE_GROUP" \
-    --location global \
-    --data-location "United States" \
-    --output none
+  if az communication show --name "$ACS_NAME" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+    echo "▶ ACS already exists: ${ACS_NAME} (skipping creation)"
+  else
+    echo "▶ Creating Azure Communication Services: ${ACS_NAME}"
+    az communication create \
+      --name "$ACS_NAME" \
+      --resource-group "$RESOURCE_GROUP" \
+      --location global \
+      --data-location "United States" \
+      --output none
+  fi
 
   ACS_CONN_STRING=$(az communication list-key \
     --name "$ACS_NAME" \
@@ -281,15 +309,19 @@ if [[ -n "${EXISTING_OPENAI_ENDPOINT:-}" ]]; then
       --output none 2>/dev/null || true
   fi
 else
-  echo "▶ Creating Azure OpenAI: ${OAI_NAME}"
-  az cognitiveservices account create \
-    --name "$OAI_NAME" \
-    --resource-group "$RESOURCE_GROUP" \
-    --location "$LOCATION" \
-    --kind OpenAI \
-    --sku S0 \
-    --custom-domain "$OAI_NAME" \
-    --output none
+  if az cognitiveservices account show --name "$OAI_NAME" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+    echo "▶ Azure OpenAI already exists: ${OAI_NAME} (skipping creation)"
+  else
+    echo "▶ Creating Azure OpenAI: ${OAI_NAME}"
+    az cognitiveservices account create \
+      --name "$OAI_NAME" \
+      --resource-group "$RESOURCE_GROUP" \
+      --location "$LOCATION" \
+      --kind OpenAI \
+      --sku S0 \
+      --custom-domain "$OAI_NAME" \
+      --output none
+  fi
 
   OAI_ENDPOINT=$(az cognitiveservices account show \
     --name "$OAI_NAME" \
@@ -301,6 +333,7 @@ else
     --resource-group "$RESOURCE_GROUP" \
     --query key1 -o tsv)
 
+  # Deploy model (idempotent – updates if it already exists)
   echo "  Deploying gpt-4o-realtime model..."
   az cognitiveservices account deployment create \
     --name "$OAI_NAME" \
@@ -311,7 +344,7 @@ else
     --model-format OpenAI \
     --sku-name GlobalStandard \
     --sku-capacity 10 \
-    --output none
+    --output none 2>/dev/null || true
 
   OAI_RESOURCE_ID=$(az cognitiveservices account show \
     --name "$OAI_NAME" \
@@ -348,13 +381,17 @@ OAI_ENDPOINT="${OAI_ENDPOINT%/}"
 echo "  OpenAI Endpoint: ${OAI_ENDPOINT}"
 
 # ─── 6. Container Registry ──────────────────────────────────────────────────
-echo "▶ Creating Container Registry: ${ACR_NAME}"
-az acr create \
-  --name "$ACR_NAME" \
-  --resource-group "$RESOURCE_GROUP" \
-  --sku Basic \
-  --admin-enabled true \
-  --output none
+if az acr show --name "$ACR_NAME" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+  echo "▶ Container Registry already exists: ${ACR_NAME} (skipping creation)"
+else
+  echo "▶ Creating Container Registry: ${ACR_NAME}"
+  az acr create \
+    --name "$ACR_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --sku Basic \
+    --admin-enabled true \
+    --output none
+fi
 
 ACR_LOGIN_SERVER=$(az acr show --name "$ACR_NAME" --resource-group "$RESOURCE_GROUP" --query loginServer -o tsv)
 ACR_USERNAME="$ACR_NAME"
@@ -364,30 +401,38 @@ ACR_PASSWORD=$(az acr credential show --name "$ACR_NAME" --query "passwords[0].v
 IMAGE_VOICE="${ACR_LOGIN_SERVER}/fabricvoicecallagent:latest"
 IMAGE_BACKEND="${ACR_LOGIN_SERVER}/fabricdataservice:latest"
 
-echo "▶ Building container image: ${IMAGE_BACKEND}"
-az acr build \
-  --registry "$ACR_NAME" \
-  --image "fabricdataservice:latest" \
-  --file "${SCRIPT_DIR}/src/FabricDataService/Dockerfile" \
-  "${SCRIPT_DIR}/src/FabricDataService/" \
-  --output none
+if [[ "$SKIP_BUILD" == true ]]; then
+  echo "▶ Skipping Docker image builds (--skip-build)"
+else
+  echo "▶ Building container image: ${IMAGE_BACKEND}"
+  az acr build \
+    --registry "$ACR_NAME" \
+    --image "fabricdataservice:latest" \
+    --file "${SCRIPT_DIR}/src/FabricDataService/Dockerfile" \
+    "${SCRIPT_DIR}/src/FabricDataService/" \
+    --output none
 
-echo "▶ Building container image: ${IMAGE_VOICE}"
-az acr build \
-  --registry "$ACR_NAME" \
-  --image "fabricvoicecallagent:latest" \
-  --file "${SCRIPT_DIR}/src/FabricVoiceCallAgent/Dockerfile" \
-  "${SCRIPT_DIR}/src/FabricVoiceCallAgent/" \
-  --output none
+  echo "▶ Building container image: ${IMAGE_VOICE}"
+  az acr build \
+    --registry "$ACR_NAME" \
+    --image "fabricvoicecallagent:latest" \
+    --file "${SCRIPT_DIR}/src/FabricVoiceCallAgent/Dockerfile" \
+    "${SCRIPT_DIR}/src/FabricVoiceCallAgent/" \
+    --output none
+fi
 
 # ─── 8. Log Analytics & Container Apps Environment ──────────────────────────
-echo "▶ Creating Log Analytics Workspace: ${LOG_NAME}"
-az monitor log-analytics workspace create \
-  --workspace-name "$LOG_NAME" \
-  --resource-group "$RESOURCE_GROUP" \
-  --location "$LOCATION" \
-  --retention-time 30 \
-  --output none
+if az monitor log-analytics workspace show --workspace-name "$LOG_NAME" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+  echo "▶ Log Analytics Workspace already exists: ${LOG_NAME} (skipping creation)"
+else
+  echo "▶ Creating Log Analytics Workspace: ${LOG_NAME}"
+  az monitor log-analytics workspace create \
+    --workspace-name "$LOG_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION" \
+    --retention-time 30 \
+    --output none
+fi
 
 LOG_CUSTOMER_ID=$(az monitor log-analytics workspace show \
   --workspace-name "$LOG_NAME" \
@@ -399,14 +444,18 @@ LOG_SHARED_KEY=$(az monitor log-analytics workspace get-shared-keys \
   --resource-group "$RESOURCE_GROUP" \
   --query primarySharedKey -o tsv)
 
-echo "▶ Creating Container Apps Environment: ${CAE_NAME}"
-az containerapp env create \
-  --name "$CAE_NAME" \
-  --resource-group "$RESOURCE_GROUP" \
-  --location "$LOCATION" \
-  --logs-workspace-id "$LOG_CUSTOMER_ID" \
-  --logs-workspace-key "$LOG_SHARED_KEY" \
-  --output none
+if az containerapp env show --name "$CAE_NAME" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+  echo "▶ Container Apps Environment already exists: ${CAE_NAME} (skipping creation)"
+else
+  echo "▶ Creating Container Apps Environment: ${CAE_NAME}"
+  az containerapp env create \
+    --name "$CAE_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION" \
+    --logs-workspace-id "$LOG_CUSTOMER_ID" \
+    --logs-workspace-key "$LOG_SHARED_KEY" \
+    --output none
+fi
 
 CAE_DOMAIN=$(az containerapp env show \
   --name "$CAE_NAME" \
@@ -414,32 +463,42 @@ CAE_DOMAIN=$(az containerapp env show \
   --query properties.defaultDomain -o tsv)
 
 # ─── 9. FabricDataService Container App (internal ingress) ──────────────────
-echo "▶ Creating Container App (Backend): ${CA_BACKEND_NAME}"
-
 BACKEND_ENV_VARS=(
   "FabricDataService__ProjectEndpoint=${FOUNDRY_PROJECT_ENDPOINT:-}"
   "FabricDataService__AgentId=${FOUNDRY_AGENT_ID:-}"
   "FabricDataService__ManagedIdentityClientId=${MI_BACKEND_CLIENT_ID}"
+  "FabricDataService__RunTimeoutSeconds=120"
 )
 
-az containerapp create \
-  --name "$CA_BACKEND_NAME" \
-  --resource-group "$RESOURCE_GROUP" \
-  --environment "$CAE_NAME" \
-  --image "$IMAGE_BACKEND" \
-  --registry-server "$ACR_LOGIN_SERVER" \
-  --registry-username "$ACR_USERNAME" \
-  --registry-password "$ACR_PASSWORD" \
-  --user-assigned "$MI_BACKEND_RESOURCE_ID" \
-  --target-port 8080 \
-  --ingress internal \
-  --transport auto \
-  --cpu 0.5 \
-  --memory 1Gi \
-  --min-replicas 1 \
-  --max-replicas 3 \
-  --env-vars "${BACKEND_ENV_VARS[@]}" \
-  --output none
+if az containerapp show --name "$CA_BACKEND_NAME" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+  echo "▶ Updating Container App (Backend): ${CA_BACKEND_NAME}"
+  az containerapp update \
+    --name "$CA_BACKEND_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --image "$IMAGE_BACKEND" \
+    --set-env-vars "${BACKEND_ENV_VARS[@]}" \
+    --output none
+else
+  echo "▶ Creating Container App (Backend): ${CA_BACKEND_NAME}"
+  az containerapp create \
+    --name "$CA_BACKEND_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --environment "$CAE_NAME" \
+    --image "$IMAGE_BACKEND" \
+    --registry-server "$ACR_LOGIN_SERVER" \
+    --registry-username "$ACR_USERNAME" \
+    --registry-password "$ACR_PASSWORD" \
+    --user-assigned "$MI_BACKEND_RESOURCE_ID" \
+    --target-port 8080 \
+    --ingress internal \
+    --transport auto \
+    --cpu 0.5 \
+    --memory 1Gi \
+    --min-replicas 1 \
+    --max-replicas 3 \
+    --env-vars "${BACKEND_ENV_VARS[@]}" \
+    --output none
+fi
 
 BACKEND_FQDN=$(az containerapp show \
   --name "$CA_BACKEND_NAME" \
@@ -465,7 +524,7 @@ VOICE_ENV_VARS=(
   "OpenAi__DeploymentName=${OPENAI_DEPLOYMENT_NAME:-gpt-realtime}"
   "OpenAi__Voice=${OPENAI_VOICE:-alloy}"
   "FabricBackend__BaseUrl=${BACKEND_URL}"
-  "FabricBackend__DefaultTimeoutSeconds=60"
+  "FabricBackend__DefaultTimeoutSeconds=120"
   "FabricBackend__FollowUpTimeoutSeconds=20"
   "VoiceAgent__DefaultPhoneNumber=${DEFAULT_PHONE_NUMBER}"
   "VoiceAgent__ManagedIdentityClientId=${MI_CLIENT_ID}"
@@ -480,25 +539,35 @@ else
   echo "  No OpenAI API key configured - app will use managed identity authentication"
 fi
 
-az containerapp create \
-  --name "$CA_VOICE_NAME" \
-  --resource-group "$RESOURCE_GROUP" \
-  --environment "$CAE_NAME" \
-  --image "$IMAGE_VOICE" \
-  --registry-server "$ACR_LOGIN_SERVER" \
-  --registry-username "$ACR_USERNAME" \
-  --registry-password "$ACR_PASSWORD" \
-  --user-assigned "$MI_RESOURCE_ID" \
-  --target-port 8080 \
-  --ingress external \
-  --transport auto \
-  --cpu 0.5 \
-  --memory 1Gi \
-  --min-replicas 1 \
-  --max-replicas 1 \
-  --secrets $SECRETS_ARG \
-  --env-vars "${VOICE_ENV_VARS[@]}" \
-  --output none
+if az containerapp show --name "$CA_VOICE_NAME" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+  echo "  Updating existing Container App (Voice Agent)..."
+  az containerapp update \
+    --name "$CA_VOICE_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --image "$IMAGE_VOICE" \
+    --set-env-vars "${VOICE_ENV_VARS[@]}" \
+    --output none
+else
+  az containerapp create \
+    --name "$CA_VOICE_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --environment "$CAE_NAME" \
+    --image "$IMAGE_VOICE" \
+    --registry-server "$ACR_LOGIN_SERVER" \
+    --registry-username "$ACR_USERNAME" \
+    --registry-password "$ACR_PASSWORD" \
+    --user-assigned "$MI_RESOURCE_ID" \
+    --target-port 8080 \
+    --ingress external \
+    --transport auto \
+    --cpu 0.5 \
+    --memory 1Gi \
+    --min-replicas 1 \
+    --max-replicas 1 \
+    --secrets $SECRETS_ARG \
+    --env-vars "${VOICE_ENV_VARS[@]}" \
+    --output none
+fi
 
 # Get the final FQDN (may differ slightly from pre-computed)
 CA_FQDN=$(az containerapp show \
@@ -520,6 +589,16 @@ if [[ -n "${EXISTING_FOUNDRY_RESOURCE_ID:-}" ]]; then
     --assignee-principal-type ServicePrincipal \
     --role "Azure AI Developer" \
     --scope "$EXISTING_FOUNDRY_RESOURCE_ID" \
+    --output none 2>/dev/null || true
+
+  # Also grant RBAC on the parent AI Services account (required for agent operations)
+  PARENT_AI_ACCOUNT_SCOPE=$(echo "$EXISTING_FOUNDRY_RESOURCE_ID" | sed 's|/projects/.*||')
+  echo "▶ Granting backend managed identity access to parent AI Services account..."
+  az role assignment create \
+    --assignee-object-id "$MI_BACKEND_PRINCIPAL_ID" \
+    --assignee-principal-type ServicePrincipal \
+    --role "Azure AI Developer" \
+    --scope "$PARENT_AI_ACCOUNT_SCOPE" \
     --output none 2>/dev/null || true
 fi
 
@@ -545,4 +624,26 @@ echo "── Test with: ──"
 echo "curl -X POST https://${CA_FQDN}/api/alert \\"
 echo "  -H 'Content-Type: application/json' \\"
 echo "  -d '{\"sourceId\":\"TEST-001\",\"sourceName\":\"Test\",\"alertType\":\"Threshold\",\"severity\":\"High\",\"title\":\"Test Alert\",\"description\":\"Testing voice agent\",\"metadata\":{}}'"
+echo ""
+echo "============================================================"
+echo "  MANUAL STEPS REQUIRED"
+echo "============================================================"
+echo ""
+echo "The backend managed identity must be granted access to the"
+echo "Microsoft Fabric workspace that the AI Foundry agent queries."
+echo "Without this, the agent will return authentication errors"
+echo "when trying to access the underlying data."
+echo ""
+echo "1. Open the Microsoft Fabric portal: https://app.fabric.microsoft.com"
+echo "2. Navigate to the workspace used by the Foundry agent's"
+echo "   Fabric Data Agent tool (e.g., lakehouse, warehouse, or KQL DB)"
+echo "3. Click 'Manage access' in the workspace settings"
+echo "4. Click 'Add people or groups'"
+echo "5. Search for: ${MI_BACKEND_NAME}  (Client ID: ${MI_BACKEND_CLIENT_ID})"
+echo "6. Assign the 'Contributor' or 'Member' role"
+echo "7. If the agent queries a specific SQL endpoint or KQL database,"
+echo "   also grant the managed identity read access on that item"
+echo ""
+echo "For more details, see:"
+echo "  https://aka.ms/foundryfabrictroubleshooting"
 echo ""
